@@ -1,0 +1,13 @@
+{
+  "name": "iaido-sensei-camp-demo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Temporary summer iaido camp website demo with registration flow and integration stubs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
