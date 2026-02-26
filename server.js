@@ -1090,9 +1090,9 @@ function getStaticFilePath(urlPath) {
     '/program': 'program.html',
     '/faq': 'faq.html',
     '/info': 'info.html',
-    '/adatkezeles': 'adatkezeles.html',
-    '/feltetelek': 'feltetelek.html',
-    '/jelentkezes': 'jelentkezes.html',
+    '/privacy': 'privacy.html',
+    '/terms': 'terms.html',
+    '/registration': 'registration.html',
     '/admin': 'admin.html'
   };
 

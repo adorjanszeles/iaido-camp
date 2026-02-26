@@ -5,9 +5,9 @@ Ez a projekt egy ideiglenes tábori weboldal demó:
 - program oldal (`/program`)
 - FAQ oldal (`/faq`)
 - info oldal (`/info`)
-- adatkezelési tájékoztató (`/adatkezeles`)
-- részvételi feltételek (`/feltetelek`)
-- jelentkezési oldal (`/jelentkezes`)
+- adatkezelési tájékoztató (`/privacy`)
+- részvételi feltételek (`/terms`)
+- jelentkezési oldal (`/registration`)
 - admin demo oldal (`/admin`)
 
 ## Mi működik most
@@ -74,9 +74,9 @@ Ezután nyisd meg:
 - http://localhost:3000/program
 - http://localhost:3000/faq
 - http://localhost:3000/info
-- http://localhost:3000/adatkezeles
-- http://localhost:3000/feltetelek
-- http://localhost:3000/jelentkezes
+- http://localhost:3000/privacy
+- http://localhost:3000/terms
+- http://localhost:3000/registration
 - http://localhost:3000/admin
 
 Az admin oldal nincs linkelve a publikus menüből, csak közvetlen URL-en érhető el.
@@ -101,7 +101,7 @@ ADMIN_SESSION_SECRET=egy-hosszu-veletlen-titok
   - `NIXPACKS_NODE_VERSION=22`
 
 ## GDPR minimum checklist (üzemeltetés)
-- Töltsd ki a valós adatkezelői adatokat a `/adatkezeles` oldalon.
+- Töltsd ki a valós adatkezelői adatokat a `/privacy` oldalon.
 - Kösd meg a szükséges adatfeldolgozói szerződéseket (pl. Stripe, Számlázz.hu, hosting).
 - Véglegesítsd a megőrzési idő szabályt és anonimizálási/törlési folyamatot.
 - Legyen incidenskezelési folyamat (adatvédelmi esemény bejelentése).
