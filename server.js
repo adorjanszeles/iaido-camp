@@ -571,6 +571,9 @@ function getStats(registrations) {
 function getStaticFilePath(urlPath) {
   const routeMap = {
     '/': 'index.html',
+    '/program': 'program.html',
+    '/faq': 'faq.html',
+    '/info': 'info.html',
     '/jelentkezes': 'jelentkezes.html',
     '/admin': 'admin.html'
   };

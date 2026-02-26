@@ -1,7 +1,10 @@
 # Iaidō Nyári Tábor - Demo Implementáció
 
 Ez a projekt egy ideiglenes tábori weboldal demó:
-- bemutatkozó oldal (`/`)
+- welcome oldal (`/`)
+- program oldal (`/program`)
+- FAQ oldal (`/faq`)
+- info oldal (`/info`)
 - jelentkezési oldal (`/jelentkezes`)
 - admin demo oldal (`/admin`)
 
@@ -40,6 +43,9 @@ npm run dev
 
 Ezután nyisd meg:
 - http://localhost:3000/
+- http://localhost:3000/program
+- http://localhost:3000/faq
+- http://localhost:3000/info
 - http://localhost:3000/jelentkezes
 - http://localhost:3000/admin
 
