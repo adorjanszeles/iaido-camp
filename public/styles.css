@@ -89,9 +89,13 @@ a {
   margin: 0 auto;
 }
 
+.home-container {
+  width: min(1320px, calc(100% - 1rem));
+}
+
 .hero-banner {
   position: relative;
-  width: min(1320px, calc(100vw - 1rem));
+  width: 100%;
   margin: 1.2rem auto 0.8rem;
   min-height: 0;
   border-radius: 24px;
@@ -122,7 +126,18 @@ a {
 }
 
 .welcome-intro {
-  margin-bottom: 1rem;
+  width: 100%;
+  margin: 0.8rem auto 1.4rem;
+  text-align: center;
+}
+
+.welcome-intro .subtitle {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.welcome-intro .cta-row {
+  justify-content: center;
 }
 
 .hero {
@@ -215,11 +230,27 @@ h1 {
   border: 1px solid var(--line);
 }
 
+.btn.small,
+.btn-small {
+  padding: 0.35rem 0.6rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
 .grid-2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
   margin: 1rem 0 2rem;
+}
+
+.home-cards {
+  width: min(1320px, calc(100vw - 1rem));
+  margin: 1rem auto 2rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
 }
 
 img.demo {
@@ -239,6 +270,14 @@ img.demo {
 
 .form-wrap {
   padding: 1.5rem 0 2rem;
+}
+
+#registration-form h2 {
+  margin-top: 1.2rem;
+}
+
+#registration-form h2:first-of-type {
+  margin-top: 0;
 }
 
 .form-grid {
@@ -396,7 +435,8 @@ footer {
 @media (max-width: 860px) {
   .hero,
   .grid-2,
-  .form-grid {
+  .form-grid,
+  .home-cards {
     grid-template-columns: 1fr;
   }
 

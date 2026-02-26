@@ -20,12 +20,12 @@
     };
 
     if (!payload.username || !payload.password) {
-      showMessage('error', 'Felhasználónév és jelszó megadása kötelező.');
+      showMessage('error', 'Username and password are required.');
       return;
     }
 
     loginBtn.disabled = true;
-    loginBtn.textContent = 'Belépés...';
+    loginBtn.textContent = 'Signing in...';
     messageEl.className = '';
     messageEl.textContent = '';
 
@@ -40,16 +40,16 @@
 
       const result = await response.json();
       if (!response.ok) {
-        showMessage('error', result.error || 'Sikertelen bejelentkezés.');
+        showMessage('error', result.error || 'Login failed.');
         return;
       }
 
       window.location.href = '/admin';
     } catch (error) {
-      showMessage('error', `Nem sikerült bejelentkezni: ${error.message}`);
+      showMessage('error', `Login request failed: ${error.message}`);
     } finally {
       loginBtn.disabled = false;
-      loginBtn.textContent = 'Belépés';
+      loginBtn.textContent = 'Sign in';
     }
   }
 

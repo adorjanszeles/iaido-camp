@@ -1,23 +1,32 @@
-# Iaidō Nyári Tábor - Demo Implementáció
+# Iaido Nyári Tábor - Demo Implementáció
 
 Ez a projekt egy ideiglenes tábori weboldal demó:
 - welcome oldal (`/`)
 - program oldal (`/program`)
 - FAQ oldal (`/faq`)
 - info oldal (`/info`)
+- adatkezelési tájékoztató (`/adatkezeles`)
+- részvételi feltételek (`/feltetelek`)
 - jelentkezési oldal (`/jelentkezes`)
 - admin demo oldal (`/admin`)
 
 ## Mi működik most
 - Regisztrációs űrlap a kért mezőkkel
-- Csomagválasztás: `Iaidō` / `Jōdō` / `Iaidō + Jōdō`
+- Csomagválasztás: `Iaido` / `Jodo` / `Iaido + Jodo`
 - Opcionális étkezés és szállás választás
 - Élő árkalkuláció a jelentkezési oldalon
 - Magánszemély számlázási adatok bekérése
-- Fokozat + vizsgaszándék + célfokozat
+- Külön Iaido/Jodo fokozat + külön Iaido/Jodo vizsgaszándék + célfokozat
 - Szerveroldali validáció
 - Mentés lokális SQLite adatbázisba (`data/camp.db`)
+- SQLite terheléskezelés: `busy_timeout` + automatikus retry íráskor
 - Admin felület bejelentkezéssel védve (`/admin`)
+- Admin statok Iaido/Jodo bontással
+- Jelentkezői opciók részletes megjelenítése az admin táblában
+- Jelentkezés státusz alapú törlése (`DELETED`, sor megtartásával)
+- GDPR anonimizálás adminból (`ANONYMIZED`, személyes adatok tisztítása)
+- Hozzájárulás verzió és időbélyeg mentése minden regisztrációnál
+- CSV export az admin felületről
 - Egyszerű statisztika API és admin lista
 
 ## Adattárolás
@@ -29,8 +38,27 @@ Ez a projekt egy ideiglenes tábori weboldal demó:
 - Számlázz.hu számlakiállítás
 - Google Sheets adattárolás
 
+## Email (Brevo) integráció
+- Regisztráció után a rendszer tud visszaigazoló emailt küldeni a jelentkezőnek.
+- Opcionálisan külön admin értesítő email is küldhető.
+- Az email küldés nem blokkolja a regisztráció mentését (hiba esetén logolás történik).
+
+Szükséges env változók:
+
+```bash
+EMAIL_PROVIDER=brevo
+BREVO_API_KEY=...
+EMAIL_FROM=no-reply@your-domain.com
+EMAIL_FROM_NAME=Ishido Sensei - Summer Seminar
+ADMIN_NOTIFY_EMAIL=you@example.com
+APP_BASE_URL=https://your-domain.com
+```
+
 A fenti integrációkhoz stub API végpontok már elérhetők:
 - `GET /api/pricing`
+- `POST /api/admin/registrations/mark-deleted`
+- `POST /api/admin/registrations/anonymize`
+- `GET /api/admin/export.csv`
 - `POST /api/payments/create-checkout-session`
 - `POST /api/invoices/create`
 - `POST /api/stripe/webhook`
@@ -46,6 +74,8 @@ Ezután nyisd meg:
 - http://localhost:3000/program
 - http://localhost:3000/faq
 - http://localhost:3000/info
+- http://localhost:3000/adatkezeles
+- http://localhost:3000/feltetelek
 - http://localhost:3000/jelentkezes
 - http://localhost:3000/admin
 
@@ -69,3 +99,10 @@ ADMIN_SESSION_SECRET=egy-hosszu-veletlen-titok
 - A deploy környezetben is Node 22 kell.
 - Ha Railway mégis Node 18-at indítana, add meg env-ben:
   - `NIXPACKS_NODE_VERSION=22`
+
+## GDPR minimum checklist (üzemeltetés)
+- Töltsd ki a valós adatkezelői adatokat a `/adatkezeles` oldalon.
+- Kösd meg a szükséges adatfeldolgozói szerződéseket (pl. Stripe, Számlázz.hu, hosting).
+- Véglegesítsd a megőrzési idő szabályt és anonimizálási/törlési folyamatot.
+- Legyen incidenskezelési folyamat (adatvédelmi esemény bejelentése).
+- Éles indulás előtt jogi felülvizsgálat javasolt.

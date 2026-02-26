@@ -1,40 +1,44 @@
 <!doctype html>
-<html lang="hu">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Admin Demo | Iaidō Nyári Tábor 2026</title>
+    <title>Admin Demo | Ishido Sensei - Summer Seminar 2026</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <div class="site-wrap">
       <header class="topbar">
-        <div class="brand">Iaidō Nyári Tábor 2026</div>
+        <div class="brand">Ishido Sensei - Summer Seminar 2026</div>
         <nav class="nav">
-          <a href="/">Publikus oldal</a>
-          <button class="btn secondary" id="logout-btn" type="button">Kijelentkezés</button>
+          <a href="/">Public site</a>
+          <button class="btn secondary" id="logout-btn" type="button">Log out</button>
         </nav>
       </header>
 
       <main class="container form-wrap">
         <section class="card">
-          <h1>Admin nézet (demo)</h1>
-          <p class="subtitle">Gyors ellenőrzéshez: regisztráció darabszámok és beérkezett rekordok listája.</p>
+          <h1>Admin view (demo)</h1>
+          <p class="subtitle">Quick overview: registration counts and list of submitted records.</p>
+          <div class="cta-row">
+            <button class="btn secondary" id="export-csv-btn" type="button">Export CSV</button>
+          </div>
           <div id="stats" class="grid-2"></div>
         </section>
 
         <section class="card">
-          <h2>Regisztrációk</h2>
+          <h2>Registrations</h2>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Dátum</th>
-                  <th>Név</th>
-                  <th>Csomag</th>
-                  <th>Opciók</th>
-                  <th>Összeg</th>
-                  <th>Státusz</th>
+                  <th>Date</th>
+                  <th>Name</th>
+                  <th>Package</th>
+                  <th>Options</th>
+                  <th>Amount</th>
+                  <th>Status</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody id="rows"></tbody>
@@ -44,7 +48,7 @@
       </main>
 
       <footer>
-        <div class="container">Admin felület. Hozzáférés csak bejelentkezett felhasználóval.</div>
+        <div class="container">Admin interface. Access is restricted to signed-in users.</div>
       </footer>
     </div>
 

@@ -1,43 +1,43 @@
 <!doctype html>
-<html lang="hu">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Admin Bejelentkezés | Iaidō Nyári Tábor 2026</title>
+    <title>Admin Login | Ishido Sensei - Summer Seminar 2026</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <div class="site-wrap">
       <header class="topbar">
-        <div class="brand">Iaidō és Jōdō Nyári Tábor 2026</div>
+        <div class="brand">Ishido Sensei - Summer Seminar 2026</div>
         <nav class="nav">
           <a href="/">Welcome</a>
+          <a href="/info">Info</a>
           <a href="/program">Program</a>
           <a href="/faq">FAQ</a>
-          <a href="/info">Info</a>
-          <a href="/jelentkezes">Jelentkezés</a>
+          <a href="/jelentkezes">Registration</a>
         </nav>
       </header>
 
       <main class="container form-wrap">
         <section class="card" style="max-width: 520px; margin: 0 auto;">
-          <h1>Admin bejelentkezés</h1>
-          <p class="subtitle">Az admin statisztikák és a jelentkezők listája bejelentkezés után érhető el.</p>
+          <h1>Admin login</h1>
+          <p class="subtitle">Admin statistics and registration list are available after sign-in.</p>
 
           <form id="admin-login-form" novalidate>
             <div class="field">
-              <label for="username">Felhasználónév</label>
+              <label for="username">Username</label>
               <input id="username" name="username" autocomplete="username" required />
             </div>
 
             <div class="field" style="margin-top: 0.8rem;">
-              <label for="password">Jelszó</label>
+              <label for="password">Password</label>
               <input id="password" name="password" type="password" autocomplete="current-password" required />
             </div>
 
             <div class="cta-row" style="margin-top: 1rem;">
-              <button class="btn primary" id="login-btn" type="submit">Belépés</button>
-              <a class="btn secondary" href="/">Vissza</a>
+              <button class="btn primary" id="login-btn" type="submit">Sign in</button>
+              <a class="btn secondary" href="/">Back</a>
             </div>
           </form>
 
@@ -46,7 +46,7 @@
       </main>
 
       <footer>
-        <div class="container">Admin felület. Csak jogosult felhasználóknak.</div>
+        <div class="container">Admin interface. Authorized users only.</div>
       </footer>
     </div>
 

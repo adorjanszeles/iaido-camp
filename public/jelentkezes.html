@@ -1,65 +1,68 @@
 <!doctype html>
-<html lang="hu">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Jelentkezés | Iaidō Nyári Tábor 2026</title>
+    <title>Registration | Ishido Sensei - Summer Seminar 2026</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <div class="site-wrap">
       <header class="topbar">
-        <div class="brand">Iaidō és Jōdō Nyári Tábor 2026</div>
+        <div class="brand">Ishido Sensei - Summer Seminar 2026</div>
         <nav class="nav">
           <a href="/">Welcome</a>
+          <a href="/info">Info</a>
           <a href="/program">Program</a>
           <a href="/faq">FAQ</a>
-          <a href="/info">Info</a>
-          <a class="active" href="/jelentkezes">Jelentkezés</a>
+          <a class="active" href="/jelentkezes">Registration</a>
         </nav>
       </header>
 
       <main class="container form-wrap">
         <section class="card">
-          <h1>Tábori jelentkezés (demo)</h1>
+          <h1>Seminar Registration (demo)</h1>
           <p class="subtitle">
-            A jelentkezés adatait eltároljuk a demo rendszerben. A fizetés és számlázás integráció jelenleg
-            kikapcsolt állapotban van, de a backend végpontok elő vannak készítve.
+            Registration data is stored in the demo system. Payment and invoicing integrations are currently disabled,
+            but backend endpoints are prepared.
           </p>
         </section>
 
         <form id="registration-form" class="card" novalidate>
-          <h2>Résztvevő adatai</h2>
+          <h2>Participant details</h2>
           <div class="form-grid">
             <div class="field">
-              <label for="fullName">Teljes név *</label>
+              <label for="fullName">Full name *</label>
               <input id="fullName" name="fullName" required />
             </div>
 
             <div class="field">
-              <label for="email">Email cím *</label>
+              <label for="email">Email address *</label>
               <input id="email" name="email" type="email" required />
             </div>
 
             <div class="field">
-              <label for="phone">Telefonszám *</label>
+              <label for="phone">Phone number *</label>
               <input id="phone" name="phone" type="tel" required />
             </div>
 
             <div class="field">
-              <label for="dateOfBirth">Születési dátum</label>
+              <label for="dateOfBirth">Date of birth</label>
               <input id="dateOfBirth" name="dateOfBirth" type="date" />
             </div>
 
             <div class="field">
-              <label for="city">Lakóhely (város) *</label>
+              <label for="city">City *</label>
               <input id="city" name="city" required />
             </div>
+          </div>
 
+          <h2>Iaido section</h2>
+          <div class="form-grid">
             <div class="field">
-              <label for="currentGrade">Jelenlegi fokozat *</label>
-              <select id="currentGrade" name="currentGrade" required>
-                <option value="">Válassz fokozatot</option>
+              <label for="currentGradeIaido">Current Iaido grade</label>
+              <select id="currentGradeIaido" name="currentGradeIaido">
+                <option value="">Select grade</option>
                 <option>6. kyu</option>
                 <option>5. kyu</option>
                 <option>4. kyu</option>
@@ -72,18 +75,17 @@
                 <option>4. dan+</option>
               </select>
             </div>
-
             <div class="field full">
-              <label class="checkline" for="wantsExam">
-                <input id="wantsExam" name="wantsExam" type="checkbox" />
-                <span>Vizsgázni szeretnék a tábor végén.</span>
+              <label class="checkline" for="wantsExamIaido">
+                <input id="wantsExamIaido" name="wantsExamIaido" type="checkbox" />
+                <span>I want to take an Iaido exam.</span>
               </label>
             </div>
 
             <div class="field">
-              <label for="targetGrade">Célfokozat (ha vizsgázol)</label>
-              <select id="targetGrade" name="targetGrade" disabled>
-                <option value="">Válassz célfokozatot</option>
+              <label for="targetGradeIaido">Iaido target grade (if taking exam)</label>
+              <select id="targetGradeIaido" name="targetGradeIaido" disabled>
+                <option value="">Select target grade</option>
                 <option>5. kyu</option>
                 <option>4. kyu</option>
                 <option>3. kyu</option>
@@ -94,74 +96,119 @@
                 <option>3. dan</option>
               </select>
             </div>
+          </div>
+
+          <h2>Jodo section</h2>
+          <div class="form-grid">
+            <div class="field">
+              <label for="currentGradeJodo">Current Jodo grade</label>
+              <select id="currentGradeJodo" name="currentGradeJodo">
+                <option value="">Select grade</option>
+                <option>6. kyu</option>
+                <option>5. kyu</option>
+                <option>4. kyu</option>
+                <option>3. kyu</option>
+                <option>2. kyu</option>
+                <option>1. kyu</option>
+                <option>1. dan</option>
+                <option>2. dan</option>
+                <option>3. dan</option>
+                <option>4. dan+</option>
+              </select>
+            </div>
+            <div class="field full">
+              <label class="checkline" for="wantsExamJodo">
+                <input id="wantsExamJodo" name="wantsExamJodo" type="checkbox" />
+                <span>I want to take a Jodo exam.</span>
+              </label>
+            </div>
 
             <div class="field">
-              <label for="foodNotes">Ételérzékenység / megjegyzés</label>
-              <input id="foodNotes" name="foodNotes" />
+              <label for="targetGradeJodo">Jodo target grade (if taking exam)</label>
+              <select id="targetGradeJodo" name="targetGradeJodo" disabled>
+                <option value="">Select target grade</option>
+                <option>5. kyu</option>
+                <option>4. kyu</option>
+                <option>3. kyu</option>
+                <option>2. kyu</option>
+                <option>1. kyu</option>
+                <option>1. dan</option>
+                <option>2. dan</option>
+                <option>3. dan</option>
+              </select>
             </div>
           </div>
 
-          <h2>Táborcsomag és opciók</h2>
+          <h2>Additional details</h2>
           <div class="form-grid">
             <div class="field">
-              <label for="campType">Részvétel típusa *</label>
+              <label for="foodNotes">Note</label>
+              <textarea id="foodNotes" name="foodNotes" maxlength="4000"></textarea>
+              <p class="helper">Maximum 4000 characters.</p>
+            </div>
+          </div>
+
+          <h2>Seminar package and options</h2>
+          <div class="form-grid">
+            <div class="field">
+              <label for="campType">Participation type *</label>
               <select id="campType" name="campType" required>
-                <option value="iaido">Csak Iaidō</option>
-                <option value="jodo">Csak Jōdō</option>
-                <option value="both">Iaidō + Jōdō</option>
+                <option value="iaido">Iaido only</option>
+                <option value="jodo">Jodo only</option>
+                <option value="both">Iaido + Jodo</option>
               </select>
             </div>
 
             <div class="field">
-              <label for="mealPlan">Étkezés</label>
+              <label for="mealPlan">Meals</label>
               <select id="mealPlan" name="mealPlan">
-                <option value="none">Nem kérek étkezést</option>
-                <option value="lunch">Ebéd csomag</option>
-                <option value="full">Teljes étkezés</option>
+                <option value="none">No meal</option>
+                <option value="lunch">Lunch package</option>
+                <option value="full">Full meal package</option>
               </select>
             </div>
 
             <div class="field">
-              <label for="accommodation">Szállás</label>
+              <label for="accommodation">Accommodation</label>
               <select id="accommodation" name="accommodation">
-                <option value="none">Nem kérek szállást</option>
-                <option value="dojo">Dojo szállás</option>
-                <option value="guesthouse">Vendégház</option>
+                <option value="none">No accommodation</option>
+                <option value="dojo">Dojo accommodation</option>
+                <option value="guesthouse">Guesthouse</option>
               </select>
             </div>
           </div>
 
           <section class="price-summary" aria-live="polite">
-            <h3>Fizetendő összeg</h3>
+            <h3>Amount due</h3>
             <ul id="price-lines" class="price-lines"></ul>
-            <p class="price-total">Végösszeg: <strong id="price-total">0 HUF</strong></p>
-            <p class="helper">A végleges összeget mindig a szerver számolja, és ez kerül majd Stripe Checkoutra.</p>
+            <p class="price-total">Total: <strong id="price-total">€0.00</strong></p>
+            <p class="helper">The final amount is always calculated on the server and will be passed to Stripe Checkout.</p>
           </section>
 
-          <h2>Számlázási adatok (magánszemély)</h2>
+          <h2>Billing details (private individual)</h2>
           <div class="form-grid">
             <div class="field">
-              <label for="billingFullName">Számlázási név *</label>
+              <label for="billingFullName">Billing full name *</label>
               <input id="billingFullName" name="billingFullName" required />
             </div>
 
             <div class="field">
-              <label for="billingZip">Irányítószám *</label>
+              <label for="billingZip">ZIP code *</label>
               <input id="billingZip" name="billingZip" inputmode="numeric" maxlength="4" required />
             </div>
 
             <div class="field">
-              <label for="billingCity">Város *</label>
+              <label for="billingCity">City *</label>
               <input id="billingCity" name="billingCity" required />
             </div>
 
             <div class="field">
-              <label for="billingCountry">Ország *</label>
-              <input id="billingCountry" name="billingCountry" value="Magyarország" required />
+              <label for="billingCountry">Country *</label>
+              <input id="billingCountry" name="billingCountry" value="Hungary" required />
             </div>
 
             <div class="field full">
-              <label for="billingAddress">Utca, házszám *</label>
+              <label for="billingAddress">Street and house number *</label>
               <input id="billingAddress" name="billingAddress" required />
             </div>
           </div>
@@ -169,22 +216,22 @@
           <div class="field full" style="margin-top: 0.8rem;">
             <label class="checkline" for="privacyConsent">
               <input id="privacyConsent" name="privacyConsent" type="checkbox" required />
-              <span>Elolvastam és elfogadom az adatkezelési tájékoztatót. *</span>
+              <span>I have read and accept the <a href="/adatkezeles" target="_blank" rel="noopener noreferrer">Privacy Notice</a>. *</span>
             </label>
           </div>
 
           <div class="field full">
             <label class="checkline" for="termsConsent">
               <input id="termsConsent" name="termsConsent" type="checkbox" required />
-              <span>Elfogadom a részvételi feltételeket. *</span>
+              <span>I accept the <a href="/feltetelek" target="_blank" rel="noopener noreferrer">Participation Terms</a>. *</span>
             </label>
           </div>
 
-          <p class="helper">* kötelező mező.</p>
+          <p class="helper">* required field.</p>
 
           <div class="cta-row">
-            <button class="btn primary" id="submit-btn" type="submit">Jelentkezés és fizetés indítása</button>
-            <a class="btn secondary" href="/">Vissza a bemutatkozáshoz</a>
+            <button class="btn primary" id="submit-btn" type="submit">Submit Registration and Start Payment</button>
+            <a class="btn secondary" href="/">Back to Welcome Page</a>
           </div>
 
           <div id="form-message" aria-live="polite"></div>
@@ -192,7 +239,7 @@
       </main>
 
       <footer>
-        <div class="container">Demo rendszer. A fizetési és számlázási lépések jelenleg stub módban futnak.</div>
+        <div class="container">Demo system. Payment and invoicing flows currently run in stub mode.</div>
       </footer>
     </div>
 

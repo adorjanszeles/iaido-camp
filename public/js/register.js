@@ -2,8 +2,10 @@
   const form = document.getElementById('registration-form');
   if (!form) return;
 
-  const wantsExamEl = document.getElementById('wantsExam');
-  const targetGradeEl = document.getElementById('targetGrade');
+  const wantsExamIaidoEl = document.getElementById('wantsExamIaido');
+  const targetGradeIaidoEl = document.getElementById('targetGradeIaido');
+  const wantsExamJodoEl = document.getElementById('wantsExamJodo');
+  const targetGradeJodoEl = document.getElementById('targetGradeJodo');
   const campTypeEl = document.getElementById('campType');
   const mealPlanEl = document.getElementById('mealPlan');
   const accommodationEl = document.getElementById('accommodation');
@@ -14,34 +16,62 @@
 
   const fallbackPricing = {
     campType: {
-      iaido: { label: 'Iaidō tábor', amountHuf: 59000 },
-      jodo: { label: 'Jōdō tábor', amountHuf: 59000 },
-      both: { label: 'Iaidō + Jōdō tábor', amountHuf: 99000 }
+      iaido: { label: 'Iaido seminar', amountHuf: 149 },
+      jodo: { label: 'Jodo seminar', amountHuf: 149 },
+      both: { label: 'Iaido + Jodo seminar', amountHuf: 249 }
     },
     mealPlan: {
-      none: { label: 'Étkezés nélkül', amountHuf: 0 },
-      lunch: { label: 'Ebéd csomag', amountHuf: 13000 },
-      full: { label: 'Teljes étkezés', amountHuf: 24000 }
+      none: { label: 'No meal', amountHuf: 0 },
+      lunch: { label: 'Lunch package', amountHuf: 33 },
+      full: { label: 'Full meal package', amountHuf: 60 }
     },
     accommodation: {
-      none: { label: 'Szállás nélkül', amountHuf: 0 },
-      dojo: { label: 'Dojo szállás', amountHuf: 29000 },
-      guesthouse: { label: 'Vendégház', amountHuf: 54000 }
+      none: { label: 'No accommodation', amountHuf: 0 },
+      dojo: { label: 'Dojo accommodation', amountHuf: 73 },
+      guesthouse: { label: 'Guesthouse', amountHuf: 135 }
+    }
+  };
+
+  const displayLabels = {
+    campType: {
+      iaido: 'Iaido seminar',
+      jodo: 'Jodo seminar',
+      both: 'Iaido + Jodo seminar'
+    },
+    mealPlan: {
+      none: 'No meal',
+      lunch: 'Lunch package',
+      full: 'Full meal package'
+    },
+    accommodation: {
+      none: 'No accommodation',
+      dojo: 'Dojo accommodation',
+      guesthouse: 'Guesthouse'
     }
   };
 
   let pricingConfig = fallbackPricing;
 
-  function formatHuf(value) {
-    return `${Number(value || 0).toLocaleString('hu-HU')} HUF`;
+  function formatCurrency(value, currency = 'EUR') {
+    return new Intl.NumberFormat('en-IE', {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }).format(Number(value || 0));
   }
 
-  function toggleTargetGrade() {
-    const enabled = wantsExamEl.checked;
-    targetGradeEl.disabled = !enabled;
+  function toggleTargetGrade(checkboxEl, targetEl) {
+    const enabled = checkboxEl.checked;
+    targetEl.disabled = !enabled;
     if (!enabled) {
-      targetGradeEl.value = '';
+      targetEl.value = '';
     }
+  }
+
+  function syncExamFields() {
+    toggleTargetGrade(wantsExamIaidoEl, targetGradeIaidoEl);
+    toggleTargetGrade(wantsExamJodoEl, targetGradeJodoEl);
   }
 
   function showMessage(type, text) {
@@ -51,7 +81,10 @@
 
   function getOption(groupName, code, fallbackCode) {
     const group = pricingConfig[groupName] || {};
-    return group[code] || group[fallbackCode] || { label: code, amountHuf: 0 };
+    const fallbackGroup = displayLabels[groupName] || {};
+    const pricingOption = group[code] || group[fallbackCode] || { amountHuf: 0 };
+    const label = fallbackGroup[code] || fallbackGroup[fallbackCode] || code;
+    return { label, amountHuf: Number(pricingOption.amountHuf || 0) };
   }
 
   function getPricingSelection() {
@@ -80,10 +113,10 @@
     const pricing = getPricingSelection();
 
     priceLinesEl.innerHTML = pricing.lineItems
-      .map((item) => `<li><span>${item.label}</span><strong>${formatHuf(item.amountHuf)}</strong></li>`)
+      .map((item) => `<li><span>${item.label}</span><strong>${formatCurrency(item.amountHuf, 'EUR')}</strong></li>`)
       .join('');
 
-    priceTotalEl.textContent = formatHuf(pricing.totalHuf);
+    priceTotalEl.textContent = formatCurrency(pricing.totalHuf, 'EUR');
   }
 
   function formDataToPayload() {
@@ -94,12 +127,15 @@
       phone: raw.get('phone'),
       dateOfBirth: raw.get('dateOfBirth'),
       city: raw.get('city'),
-      currentGrade: raw.get('currentGrade'),
+      currentGradeIaido: raw.get('currentGradeIaido'),
+      currentGradeJodo: raw.get('currentGradeJodo'),
       campType: raw.get('campType'),
       mealPlan: raw.get('mealPlan'),
       accommodation: raw.get('accommodation'),
-      wantsExam: Boolean(raw.get('wantsExam')),
-      targetGrade: raw.get('targetGrade'),
+      wantsExamIaido: Boolean(raw.get('wantsExamIaido')),
+      targetGradeIaido: raw.get('targetGradeIaido'),
+      wantsExamJodo: Boolean(raw.get('wantsExamJodo')),
+      targetGradeJodo: raw.get('targetGradeJodo'),
       billingFullName: raw.get('billingFullName'),
       billingZip: raw.get('billingZip'),
       billingCity: raw.get('billingCity'),
@@ -135,7 +171,7 @@
     const payload = formDataToPayload();
 
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Továbbítás a fizetéshez...';
+    submitBtn.textContent = 'Redirecting to payment...';
 
     try {
       const response = await fetch('/api/register', {
@@ -149,33 +185,34 @@
       const result = await response.json();
 
       if (!response.ok) {
-        const errorText = Array.isArray(result.errors) ? result.errors.join(' ') : result.error || 'Hiba történt.';
+        const errorText = Array.isArray(result.errors) ? result.errors.join(' ') : result.error || 'An error occurred.';
         showMessage('error', errorText);
         return;
       }
 
-      const amountText = result.pricing ? formatHuf(result.pricing.totalHuf) : 'ismeretlen összeg';
+      const amountText = result.pricing ? formatCurrency(result.pricing.totalHuf, result.pricing.currency || 'EUR') : 'unknown amount';
       form.reset();
-      toggleTargetGrade();
+      syncExamFields();
       renderPriceSummary();
       showMessage(
         'ok',
-        `Sikeres mentés (${result.registrationId}). Kalkulált végösszeg: ${amountText}. Demo módban a Stripe átirányítás még nincs bekötve.`
+        `Saved successfully (${result.registrationId}). Calculated total: ${amountText}. Stripe redirect is not enabled in demo mode yet.`
       );
     } catch (error) {
-      showMessage('error', `Nem sikerült elküldeni az űrlapot: ${error.message}`);
+      showMessage('error', `Failed to submit the form: ${error.message}`);
     } finally {
       submitBtn.disabled = false;
-      submitBtn.textContent = 'Jelentkezés és fizetés indítása';
+      submitBtn.textContent = 'Submit Registration and Start Payment';
     }
   }
 
-  wantsExamEl.addEventListener('change', toggleTargetGrade);
+  wantsExamIaidoEl.addEventListener('change', syncExamFields);
+  wantsExamJodoEl.addEventListener('change', syncExamFields);
   campTypeEl.addEventListener('change', renderPriceSummary);
   mealPlanEl.addEventListener('change', renderPriceSummary);
   accommodationEl.addEventListener('change', renderPriceSummary);
   form.addEventListener('submit', submitForm);
 
-  toggleTargetGrade();
+  syncExamFields();
   loadPricingConfig();
 })();
