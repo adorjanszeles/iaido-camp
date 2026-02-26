@@ -58,3 +58,8 @@ ADMIN_SESSION_SECRET=egy-hosszu-veletlen-titok
 
 ## Környezeti igény
 - Node.js 22+ (a `node:sqlite` modul miatt)
+
+## Railway megjegyzés
+- A deploy környezetben is Node 22 kell.
+- Ha Railway mégis Node 18-at indítana, add meg env-ben:
+  - `NIXPACKS_NODE_VERSION=22`
