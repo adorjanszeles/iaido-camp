@@ -865,6 +865,37 @@ function isValidDateOfBirth(value) {
   );
 }
 
+const GRADE_ORDER = [
+  'Mukyu',
+  '2. kyu',
+  '1. kyu',
+  '1. dan',
+  '2. dan',
+  '3. dan',
+  '4. dan',
+  '5. dan',
+  '6. dan',
+  '7. dan',
+  '8. dan'
+];
+
+const EXAM_ALLOWED_TARGET_GRADES = new Set(['2. kyu', '1. kyu', '1. dan', '2. dan', '3. dan', '4. dan', '5. dan']);
+
+function getNextGrade(currentGrade) {
+  const normalized = String(currentGrade || '').trim();
+  const index = GRADE_ORDER.indexOf(normalized);
+  if (index < 0) return '';
+  return GRADE_ORDER[index + 1] || '';
+}
+
+function isValidNextExamTarget(currentGrade, targetGrade) {
+  const normalizedTarget = String(targetGrade || '').trim();
+  const nextGrade = getNextGrade(currentGrade);
+  if (!nextGrade) return false;
+  if (!EXAM_ALLOWED_TARGET_GRADES.has(nextGrade)) return false;
+  return normalizedTarget === nextGrade;
+}
+
 function sanitizePayload(payload, pricingSettings = DEFAULT_PRICING_SETTINGS) {
   const fallbackTargetGradeIaido = payload.targetGradeIaido ?? payload.targetGrade ?? '';
   const fallbackCurrentGradeIaido = payload.currentGradeIaido ?? payload.currentGrade ?? '';
@@ -930,9 +961,25 @@ function validateRegistration(data, pricingSettings = DEFAULT_PRICING_SETTINGS) 
   if (data.wantsExamIaido && !isNonEmptyString(data.targetGradeIaido)) {
     errors.push('Iaido target grade is required if Iaido exam is selected.');
   }
+  if (
+    data.wantsExamIaido &&
+    isNonEmptyString(data.currentGradeIaido) &&
+    isNonEmptyString(data.targetGradeIaido) &&
+    !isValidNextExamTarget(data.currentGradeIaido, data.targetGradeIaido)
+  ) {
+    errors.push('Iaido exam target grade must be exactly one level above the current Iaido grade.');
+  }
 
   if (data.wantsExamJodo && !isNonEmptyString(data.targetGradeJodo)) {
     errors.push('Jodo target grade is required if Jodo exam is selected.');
+  }
+  if (
+    data.wantsExamJodo &&
+    isNonEmptyString(data.currentGradeJodo) &&
+    isNonEmptyString(data.targetGradeJodo) &&
+    !isValidNextExamTarget(data.currentGradeJodo, data.targetGradeJodo)
+  ) {
+    errors.push('Jodo exam target grade must be exactly one level above the current Jodo grade.');
   }
 
   if (data.wantsExamIaido && data.campType === 'jodo') {

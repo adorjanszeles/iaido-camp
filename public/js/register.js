@@ -6,11 +6,27 @@
   const targetGradeIaidoEl = document.getElementById('targetGradeIaido');
   const wantsExamJodoEl = document.getElementById('wantsExamJodo');
   const targetGradeJodoEl = document.getElementById('targetGradeJodo');
+  const currentGradeIaidoEl = document.getElementById('currentGradeIaido');
+  const currentGradeJodoEl = document.getElementById('currentGradeJodo');
   const campTypeEl = document.getElementById('campType');
   const priceLinesEl = document.getElementById('price-lines');
   const priceTotalEl = document.getElementById('price-total');
   const messageEl = document.getElementById('form-message');
   const submitBtn = document.getElementById('submit-btn');
+  const gradeOrder = [
+    'Mukyu',
+    '2. kyu',
+    '1. kyu',
+    '1. dan',
+    '2. dan',
+    '3. dan',
+    '4. dan',
+    '5. dan',
+    '6. dan',
+    '7. dan',
+    '8. dan'
+  ];
+  const allowedExamTargets = new Set(['2. kyu', '1. kyu', '1. dan', '2. dan', '3. dan', '4. dan', '5. dan']);
 
   const fallbackPricing = {
     campType: {
@@ -31,17 +47,48 @@
     }).format(Number(value || 0));
   }
 
-  function toggleTargetGrade(checkboxEl, targetEl) {
-    const enabled = checkboxEl.checked;
-    targetEl.disabled = !enabled;
-    if (!enabled) {
+  function getNextGrade(currentGrade) {
+    const index = gradeOrder.indexOf(String(currentGrade || '').trim());
+    if (index < 0) return '';
+    return gradeOrder[index + 1] || '';
+  }
+
+  function setTargetOptions(targetEl, nextGrade) {
+    targetEl.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = nextGrade ? 'Select target grade' : 'No eligible target grade';
+    targetEl.appendChild(placeholder);
+
+    if (nextGrade) {
+      const option = document.createElement('option');
+      option.value = nextGrade;
+      option.textContent = nextGrade;
+      targetEl.appendChild(option);
+      targetEl.value = nextGrade;
+    } else {
       targetEl.value = '';
     }
   }
 
+  function syncExamField(checkboxEl, currentGradeEl, targetEl) {
+    const currentGrade = String(currentGradeEl.value || '').trim();
+    const nextGrade = getNextGrade(currentGrade);
+    const allowedNextGrade = allowedExamTargets.has(nextGrade) ? nextGrade : '';
+
+    if (!checkboxEl.checked) {
+      targetEl.disabled = true;
+      targetEl.value = '';
+      return;
+    }
+
+    targetEl.disabled = !allowedNextGrade;
+    setTargetOptions(targetEl, allowedNextGrade);
+  }
+
   function syncExamFields() {
-    toggleTargetGrade(wantsExamIaidoEl, targetGradeIaidoEl);
-    toggleTargetGrade(wantsExamJodoEl, targetGradeJodoEl);
+    syncExamField(wantsExamIaidoEl, currentGradeIaidoEl, targetGradeIaidoEl);
+    syncExamField(wantsExamJodoEl, currentGradeJodoEl, targetGradeJodoEl);
   }
 
   function showMessage(type, text) {
@@ -111,6 +158,30 @@
     };
   }
 
+  function validateExamProgression(payload) {
+    const errors = [];
+
+    if (payload.wantsExamIaido) {
+      const nextIaido = getNextGrade(payload.currentGradeIaido);
+      if (!allowedExamTargets.has(nextIaido)) {
+        errors.push('Iaido exam is only available when the next grade is between 2. kyu and 5. dan.');
+      } else if (String(payload.targetGradeIaido || '').trim() !== nextIaido) {
+        errors.push('Iaido exam target grade must be exactly one level above the current Iaido grade.');
+      }
+    }
+
+    if (payload.wantsExamJodo) {
+      const nextJodo = getNextGrade(payload.currentGradeJodo);
+      if (!allowedExamTargets.has(nextJodo)) {
+        errors.push('Jodo exam is only available when the next grade is between 2. kyu and 5. dan.');
+      } else if (String(payload.targetGradeJodo || '').trim() !== nextJodo) {
+        errors.push('Jodo exam target grade must be exactly one level above the current Jodo grade.');
+      }
+    }
+
+    return errors;
+  }
+
   async function loadPricingConfig() {
     try {
       const response = await fetch('/api/pricing');
@@ -135,6 +206,11 @@
     messageEl.textContent = '';
 
     const payload = formDataToPayload();
+    const examErrors = validateExamProgression(payload);
+    if (examErrors.length > 0) {
+      showMessage('error', examErrors.join(' '));
+      return;
+    }
 
     submitBtn.disabled = true;
     submitBtn.textContent = 'Redirecting to payment...';
@@ -176,6 +252,8 @@
 
   wantsExamIaidoEl.addEventListener('change', syncExamFields);
   wantsExamJodoEl.addEventListener('change', syncExamFields);
+  currentGradeIaidoEl.addEventListener('change', syncExamFields);
+  currentGradeJodoEl.addEventListener('change', syncExamFields);
   campTypeEl.addEventListener('change', renderPriceSummary);
   form.addEventListener('submit', submitForm);
 
