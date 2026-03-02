@@ -253,6 +253,58 @@ h1 {
   gap: 1rem;
 }
 
+.faq-accordion {
+  width: 100%;
+  margin: 1rem 0 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.faq-item {
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+}
+
+.faq-item summary {
+  list-style: none;
+  cursor: pointer;
+  font-family: "Palatino Linotype", "Book Antiqua", serif;
+  font-size: 1.12rem;
+  font-weight: 700;
+  padding: 1rem 1.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.faq-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq-item summary::after {
+  content: ">";
+  font-size: 1.28rem;
+  color: var(--accent-strong);
+  line-height: 1;
+  display: inline-block;
+  transform: rotate(90deg) scaleY(1.25);
+  transform-origin: center;
+  transition: transform 0.18s ease;
+}
+
+.faq-item[open] summary::after {
+  content: ">";
+  transform: rotate(-90deg) scaleY(1.25);
+}
+
+.faq-item p {
+  margin: 0;
+  padding: 0 1.2rem 1.1rem;
+}
+
 img.demo {
   width: 100%;
   border-radius: 16px;
