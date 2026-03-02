@@ -17,69 +17,84 @@
       </header>
 
       <main class="container form-wrap">
-        <section class="card">
-          <h1>Admin view (demo)</h1>
-          <p class="subtitle">Quick overview: registration counts and list of submitted records.</p>
-          <div class="cta-row">
-            <button class="btn secondary" id="export-csv-btn" type="button">Export CSV</button>
-          </div>
-          <div id="stats" class="grid-2"></div>
-        </section>
-
-        <section class="card">
-          <h2>Pricing settings</h2>
-          <p class="subtitle">Update package prices (EUR only).</p>
-          <form id="pricing-form" novalidate>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Option</th>
-                    <th>EUR</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>Iaido seminar</td>
-                    <td><input data-price-group="campType" data-price-code="iaido" inputmode="decimal" /></td>
-                  </tr>
-                  <tr>
-                    <td>Jodo seminar</td>
-                    <td><input data-price-group="campType" data-price-code="jodo" inputmode="decimal" /></td>
-                  </tr>
-                  <tr>
-                    <td>Iaido + Jodo seminar</td>
-                    <td><input data-price-group="campType" data-price-code="both" inputmode="decimal" /></td>
-                  </tr>
-                </tbody>
-              </table>
+        <section class="faq-accordion">
+          <details class="card faq-item admin-accordion-item">
+            <summary>Admin view</summary>
+            <div class="accordion-content">
+              <p class="subtitle">Quick overview: registration counts and list of submitted records.</p>
+              <div class="cta-row">
+                <button class="btn secondary" id="export-csv-btn" type="button">Export CSV</button>
+              </div>
+              <div id="stats" class="grid-2"></div>
             </div>
+          </details>
 
-            <div class="cta-row">
-              <button class="btn primary" id="save-pricing-btn" type="submit">Save pricing settings</button>
+          <details class="card faq-item admin-accordion-item">
+            <summary>Pricing settings</summary>
+            <div class="accordion-content">
+              <p class="subtitle">Update package prices (EUR only).</p>
+              <form id="pricing-form" novalidate>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Option</th>
+                        <th>EUR</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>Iaido seminar</td>
+                        <td><input data-price-group="campType" data-price-code="iaido" inputmode="decimal" /></td>
+                      </tr>
+                      <tr>
+                        <td>Jodo seminar</td>
+                        <td><input data-price-group="campType" data-price-code="jodo" inputmode="decimal" /></td>
+                      </tr>
+                      <tr>
+                        <td>Iaido + Jodo seminar</td>
+                        <td><input data-price-group="campType" data-price-code="both" inputmode="decimal" /></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div class="cta-row">
+                  <button class="btn primary" id="save-pricing-btn" type="submit">Save pricing settings</button>
+                </div>
+                <div id="pricing-message" aria-live="polite"></div>
+              </form>
             </div>
-            <div id="pricing-message" aria-live="polite"></div>
-          </form>
-        </section>
+          </details>
 
-        <section class="card">
-          <h2>Registrations</h2>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Name</th>
-                  <th>Package</th>
-                  <th>Details</th>
-                  <th>Amount</th>
-                  <th>Status</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody id="rows"></tbody>
-            </table>
-          </div>
+          <details class="card faq-item admin-accordion-item">
+            <summary>Registrations</summary>
+            <div class="accordion-content">
+              <div class="form-grid" style="margin: 0 0 0.8rem;">
+                <div class="field full">
+                  <label for="registration-search">Filter by name or email</label>
+                  <input id="registration-search" type="search" placeholder="Type a name or email..." autocomplete="off" />
+                  <p id="registration-search-meta" class="helper">Showing 0 registrations.</p>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Name</th>
+                      <th>Package</th>
+                      <th>Details</th>
+                      <th>Amount</th>
+                      <th>Status</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="rows"></tbody>
+                </table>
+              </div>
+            </div>
+          </details>
         </section>
       </main>
 

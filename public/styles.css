@@ -351,6 +351,14 @@ h1 {
   padding: 0 1.2rem 1.1rem;
 }
 
+.accordion-content {
+  padding: 0 1.2rem 1.1rem;
+}
+
+.admin-accordion-item .grid-2 {
+  margin-bottom: 0;
+}
+
 img.demo {
   width: 100%;
   height: auto;
@@ -526,6 +534,54 @@ th {
   min-width: 7rem;
 }
 
+.registration-details-row td {
+  background: linear-gradient(180deg, #f2f8ff 0%, #ebf3fd 100%);
+  border-bottom: 1px solid #aecdeb;
+  padding: 0.9rem;
+}
+
+.registration-details-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem 1rem;
+}
+
+.registration-detail-item {
+  padding: 0.55rem 0.65rem;
+  border: 1px solid #c3d6ea;
+  border-radius: 10px;
+  background: #ffffffd4;
+}
+
+.registration-detail-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #2a4f72;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.registration-detail-value {
+  margin-top: 0.2rem;
+  color: #17314b;
+  word-break: break-word;
+}
+
+.registration-note-block {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid #c3d6ea;
+  border-radius: 10px;
+  background: #ffffffd4;
+}
+
+.registration-note-value {
+  margin-top: 0.25rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #17314b;
+}
+
 footer {
   margin-top: auto;
   border-top: 1px solid rgba(35, 73, 111, 0.2);
@@ -549,7 +605,8 @@ footer {
   .hero,
   .grid-2,
   .form-grid,
-  .home-cards {
+  .home-cards,
+  .registration-details-grid {
     grid-template-columns: 1fr;
   }
 

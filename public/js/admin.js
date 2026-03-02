@@ -5,6 +5,9 @@
   const exportCsvBtn = document.getElementById('export-csv-btn');
   const pricingFormEl = document.getElementById('pricing-form');
   const pricingMessageEl = document.getElementById('pricing-message');
+  const registrationSearchEl = document.getElementById('registration-search');
+  const registrationSearchMetaEl = document.getElementById('registration-search-meta');
+  let allRegistrations = [];
 
   const labels = {
     campType: {
@@ -52,21 +55,92 @@
     return group[code] || code || '-';
   }
 
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function formatDateTime(value) {
+    if (!value) return '-';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString('en-GB');
+  }
+
+  function boolToYesNo(value) {
+    return value ? 'Yes' : 'No';
+  }
+
   function buildOptionsText(item) {
-    const gradeIaido = `Iaido grade: ${item.currentGradeIaido || '-'}`;
-    const gradeJodo = `Jodo grade: ${item.currentGradeJodo || '-'}`;
+    const gradeIaido = `Iaido grade: ${escapeHtml(item.currentGradeIaido || '-')}`;
+    const gradeJodo = `Jodo grade: ${escapeHtml(item.currentGradeJodo || '-')}`;
     const examIaido = item.wantsExamIaido
-      ? `Iaido exam: yes (${item.targetGradeIaido || '-'})`
+      ? `Iaido exam: yes (${escapeHtml(item.targetGradeIaido || '-')})`
       : 'Iaido exam: no';
     const examJodo = item.wantsExamJodo
-      ? `Jodo exam: yes (${item.targetGradeJodo || '-'})`
+      ? `Jodo exam: yes (${escapeHtml(item.targetGradeJodo || '-')})`
       : 'Jodo exam: no';
     return `<span class="helper">${gradeIaido} | ${gradeJodo}<br />${examIaido} | ${examJodo}</span>`;
   }
 
-  function renderRows(registrations) {
+  function renderDetailField(label, value) {
+    return `
+      <div class="registration-detail-item">
+        <div class="registration-detail-label">${escapeHtml(label)}</div>
+        <div class="registration-detail-value">${escapeHtml(value || '-')}</div>
+      </div>
+    `;
+  }
+
+  function buildRegistrationDetails(item) {
+    return `
+      <div class="registration-details-grid">
+        ${renderDetailField('Registration ID', item.id)}
+        ${renderDetailField('Created at', formatDateTime(item.createdAt))}
+        ${renderDetailField('Status', item.status)}
+        ${renderDetailField('Package', formatOption('campType', item.campType))}
+        ${renderDetailField('Amount', formatCurrency(Number(item.amount ?? item.amountHuf ?? 0), item.currency || 'EUR'))}
+        ${renderDetailField('Currency', item.currency || 'EUR')}
+
+        ${renderDetailField('Full name', item.fullName)}
+        ${renderDetailField('Email', item.email)}
+        ${renderDetailField('Phone', item.phone)}
+        ${renderDetailField('Date of birth', item.dateOfBirth)}
+        ${renderDetailField('City', item.city)}
+
+        ${renderDetailField('Current Iaido grade', item.currentGradeIaido)}
+        ${renderDetailField('Iaido exam', item.wantsExamIaido ? `Yes (${item.targetGradeIaido || '-'})` : 'No')}
+        ${renderDetailField('Current Jodo grade', item.currentGradeJodo)}
+        ${renderDetailField('Jodo exam', item.wantsExamJodo ? `Yes (${item.targetGradeJodo || '-'})` : 'No')}
+
+        ${renderDetailField('Billing full name', item.billingFullName)}
+        ${renderDetailField('Billing ZIP', item.billingZip)}
+        ${renderDetailField('Billing city', item.billingCity)}
+        ${renderDetailField('Billing address', item.billingAddress)}
+        ${renderDetailField('Billing country', item.billingCountry)}
+
+        ${renderDetailField('Privacy consent', boolToYesNo(item.privacyConsent))}
+        ${renderDetailField('Terms consent', boolToYesNo(item.termsConsent))}
+        ${renderDetailField('Privacy consent at', item.privacyConsentAt)}
+        ${renderDetailField('Terms consent at', item.termsConsentAt)}
+      </div>
+      <div class="registration-note-block">
+        <div class="registration-detail-label">Note</div>
+        <div class="registration-note-value">${escapeHtml(item.foodNotes || '-')}</div>
+      </div>
+    `;
+  }
+
+  function renderRows(registrations, options = {}) {
+    const hasFilter = Boolean(options.hasFilter);
     if (!registrations.length) {
-      rowsEl.innerHTML = '<tr><td colspan="7">No registrations yet.</td></tr>';
+      rowsEl.innerHTML = hasFilter
+        ? '<tr><td colspan="7">No matching registrations.</td></tr>'
+        : '<tr><td colspan="7">No registrations yet.</td></tr>';
       return;
     }
 
@@ -84,21 +158,56 @@
         const anonymizeAction = isAnonymized
           ? '<span class="helper">Anonymized</span>'
           : `<button class="btn secondary btn-small js-anonymize" data-registration-id="${item.id}" type="button">GDPR anonymize</button>`;
-        const actionButtons = `${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}`;
+        const detailsToggle = `<button class="btn secondary btn-small js-toggle-details" data-registration-id="${item.id}" aria-expanded="false" type="button">Show details</button>`;
+        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}`;
+        const detailRow = `
+          <tr class="registration-details-row" data-details-row="${item.id}" hidden>
+            <td colspan="7">
+              ${buildRegistrationDetails(item)}
+            </td>
+          </tr>
+        `;
 
         return `
           <tr>
-            <td>${new Date(item.createdAt).toLocaleString('en-GB')}</td>
-            <td>${item.fullName}<br /><span class="helper">${item.email}</span></td>
-            <td>${camp}</td>
+            <td>${formatDateTime(item.createdAt)}</td>
+            <td>${escapeHtml(item.fullName)}<br /><span class="helper">${escapeHtml(item.email)}</span></td>
+            <td>${escapeHtml(camp)}</td>
             <td>${buildOptionsText(item)}</td>
             <td>${formatCurrency(amount, item.currency || 'EUR')}</td>
-            <td>${item.status}</td>
+            <td>${escapeHtml(item.status)}</td>
             <td>${actionButtons}</td>
           </tr>
+          ${detailRow}
         `;
       })
       .join('');
+  }
+
+  function updateSearchMeta(visibleCount, totalCount, query) {
+    if (!registrationSearchMetaEl) return;
+    if (!query) {
+      registrationSearchMetaEl.textContent = `Showing ${totalCount} registrations.`;
+      return;
+    }
+
+    registrationSearchMetaEl.textContent = `Showing ${visibleCount} of ${totalCount} registrations for "${query}".`;
+  }
+
+  function filterRegistrations() {
+    const query = String(registrationSearchEl?.value || '').trim();
+    const normalized = query.toLowerCase();
+
+    const filtered = !normalized
+      ? allRegistrations
+      : allRegistrations.filter((item) => {
+        const fullName = String(item.fullName || '').toLowerCase();
+        const email = String(item.email || '').toLowerCase();
+        return fullName.includes(normalized) || email.includes(normalized);
+      });
+
+    renderRows(filtered, { hasFilter: normalized.length > 0 });
+    updateSearchMeta(filtered.length, allRegistrations.length, query);
   }
 
   function showPricingMessage(type, text) {
@@ -200,11 +309,14 @@
       }
 
       renderStats(statsData.stats);
-      renderRows(regsData.registrations || []);
+      allRegistrations = Array.isArray(regsData.registrations) ? regsData.registrations : [];
+      filterRegistrations();
       populatePricingForm(pricingData.settings || {});
     } catch (error) {
       statsEl.innerHTML = `<div class="notice error">${error.message}</div>`;
       rowsEl.innerHTML = '<tr><td colspan="7">Failed to load data.</td></tr>';
+      allRegistrations = [];
+      updateSearchMeta(0, 0, '');
       showPricingMessage('error', 'Failed to load pricing settings.');
     }
   }
@@ -327,7 +439,25 @@
     pricingFormEl.addEventListener('submit', savePricingSettings);
   }
 
+  if (registrationSearchEl) {
+    registrationSearchEl.addEventListener('input', filterRegistrations);
+  }
+
   rowsEl.addEventListener('click', (event) => {
+    const toggleButton = event.target.closest('.js-toggle-details');
+    if (toggleButton) {
+      const registrationId = toggleButton.getAttribute('data-registration-id');
+      if (!registrationId) return;
+      const detailsRow = rowsEl.querySelector(`tr[data-details-row="${registrationId}"]`);
+      if (!detailsRow) return;
+
+      const isOpen = !detailsRow.hidden;
+      detailsRow.hidden = isOpen;
+      toggleButton.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
+      toggleButton.textContent = isOpen ? 'Show details' : 'Hide details';
+      return;
+    }
+
     const deleteButton = event.target.closest('.js-mark-deleted');
     if (deleteButton) {
       const registrationId = deleteButton.getAttribute('data-registration-id');
