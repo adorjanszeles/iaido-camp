@@ -176,13 +176,21 @@
                 <option value="guesthouse">Guesthouse</option>
               </select>
             </div>
+
+            <div class="field">
+              <label for="paymentCurrency">Payment currency *</label>
+              <select id="paymentCurrency" name="paymentCurrency" required>
+                <option value="EUR">EUR</option>
+                <option value="HUF">HUF</option>
+              </select>
+            </div>
           </div>
 
           <section class="price-summary" aria-live="polite">
             <h3>Amount due</h3>
             <ul id="price-lines" class="price-lines"></ul>
             <p class="price-total">Total: <strong id="price-total">€0.00</strong></p>
-            <p class="helper">The final amount is always calculated on the server and will be passed to Stripe Checkout.</p>
+            <p class="helper">The final amount is always calculated on the server in your selected currency and will be passed to Stripe Checkout.</p>
           </section>
 
           <h2>Billing details (private individual)</h2>

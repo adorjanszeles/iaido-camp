@@ -3,6 +3,11 @@
   const rowsEl = document.getElementById('rows');
   const logoutBtn = document.getElementById('logout-btn');
   const exportCsvBtn = document.getElementById('export-csv-btn');
+  const pricingFormEl = document.getElementById('pricing-form');
+  const pricingMessageEl = document.getElementById('pricing-message');
+  const currencyEurEl = document.getElementById('currency-eur');
+  const currencyHufEl = document.getElementById('currency-huf');
+  const defaultCurrencyEl = document.getElementById('default-currency');
 
   const labels = {
     campType: {
@@ -23,11 +28,12 @@
   };
 
   function formatCurrency(value, currency = 'EUR') {
+    const decimals = currency === 'HUF' ? 0 : 2;
     return new Intl.NumberFormat('en-IE', {
       style: 'currency',
       currency,
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals
     }).format(Number(value || 0));
   }
 
@@ -41,6 +47,21 @@
   }
 
   function renderStats(stats) {
+    const revenueByCurrency = stats.projectedRevenueByCurrency && typeof stats.projectedRevenueByCurrency === 'object'
+      ? stats.projectedRevenueByCurrency
+      : {};
+
+    const revenueCards = [];
+    if (Object.prototype.hasOwnProperty.call(revenueByCurrency, 'EUR')) {
+      revenueCards.push(renderStatCard('Projected revenue (EUR)', formatCurrency(revenueByCurrency.EUR, 'EUR')));
+    }
+    if (Object.prototype.hasOwnProperty.call(revenueByCurrency, 'HUF')) {
+      revenueCards.push(renderStatCard('Projected revenue (HUF)', formatCurrency(revenueByCurrency.HUF, 'HUF')));
+    }
+    if (revenueCards.length === 0) {
+      revenueCards.push(renderStatCard('Projected revenue', formatCurrency(0, 'EUR')));
+    }
+
     statsEl.innerHTML = [
       renderStatCard('Active registrations', stats.total),
       renderStatCard('Iaido applicants', stats.iaidoApplicants || 0),
@@ -49,7 +70,7 @@
       renderStatCard('Anonymized', stats.anonymizedCount || 0),
       renderStatCard('Iaido exam applicants', stats.wantsExamIaido || 0),
       renderStatCard('Jodo exam applicants', stats.wantsExamJodo || 0),
-      renderStatCard('Projected revenue', formatCurrency(stats.projectedRevenueHuf, 'EUR'))
+      ...revenueCards
     ].join('');
   }
 
@@ -85,6 +106,7 @@
         const camp = formatOption('campType', item.campType);
         const isDeleted = item.status === 'DELETED';
         const isAnonymized = item.status === 'ANONYMIZED';
+        const amount = Number(item.amount ?? item.amountHuf ?? 0);
         const deleteAction = isDeleted || isAnonymized
           ? '<span class="helper">-</span>'
           : `<button class="btn secondary btn-small js-mark-deleted" data-registration-id="${item.id}" type="button">Set deleted</button>`;
@@ -99,7 +121,7 @@
             <td>${item.fullName}<br /><span class="helper">${item.email}</span></td>
             <td>${camp}</td>
             <td>${buildOptionsText(item)}</td>
-            <td>${formatCurrency(item.amountHuf, item.currency || 'EUR')}</td>
+            <td>${formatCurrency(amount, item.currency || 'EUR')}</td>
             <td>${item.status}</td>
             <td>${actionButtons}</td>
           </tr>
@@ -108,27 +130,168 @@
       .join('');
   }
 
+  function showPricingMessage(type, text) {
+    if (!pricingMessageEl) return;
+    pricingMessageEl.className = `notice ${type}`;
+    pricingMessageEl.textContent = text;
+  }
+
+  function syncDefaultCurrencyOptions() {
+    if (!defaultCurrencyEl) return;
+
+    const enabled = [];
+    if (currencyEurEl && currencyEurEl.checked) enabled.push('EUR');
+    if (currencyHufEl && currencyHufEl.checked) enabled.push('HUF');
+
+    Array.from(defaultCurrencyEl.options).forEach((option) => {
+      option.disabled = !enabled.includes(option.value);
+    });
+
+    if (enabled.length > 0 && !enabled.includes(defaultCurrencyEl.value)) {
+      defaultCurrencyEl.value = enabled[0];
+    }
+  }
+
+  function populatePricingForm(settings) {
+    if (!pricingFormEl || !settings || typeof settings !== 'object') return;
+
+    const inputs = pricingFormEl.querySelectorAll('[data-price-group][data-price-code][data-currency]');
+    inputs.forEach((input) => {
+      const group = input.getAttribute('data-price-group');
+      const code = input.getAttribute('data-price-code');
+      const currency = input.getAttribute('data-currency');
+      const amount = settings?.prices?.[group]?.[code]?.[currency];
+      input.value = Number.isFinite(Number(amount)) ? String(amount) : '';
+    });
+
+    const enabled = Array.isArray(settings?.currencies?.enabled)
+      ? settings.currencies.enabled.map((value) => String(value || '').toUpperCase())
+      : ['EUR'];
+
+    if (currencyEurEl) currencyEurEl.checked = enabled.includes('EUR');
+    if (currencyHufEl) currencyHufEl.checked = enabled.includes('HUF');
+
+    const defaultCurrency = String(settings?.currencies?.default || '').toUpperCase();
+    if (defaultCurrencyEl) {
+      defaultCurrencyEl.value = defaultCurrency === 'HUF' ? 'HUF' : 'EUR';
+    }
+
+    syncDefaultCurrencyOptions();
+    showPricingMessage('ok', 'Pricing settings loaded.');
+  }
+
+  function collectPricingPayload() {
+    if (!pricingFormEl) {
+      throw new Error('Pricing form is not available.');
+    }
+
+    const prices = {
+      campType: {},
+      mealPlan: {},
+      accommodation: {}
+    };
+
+    const inputs = pricingFormEl.querySelectorAll('[data-price-group][data-price-code][data-currency]');
+    inputs.forEach((input) => {
+      const group = input.getAttribute('data-price-group');
+      const code = input.getAttribute('data-price-code');
+      const currency = input.getAttribute('data-currency');
+      const raw = String(input.value || '').trim();
+      const numeric = Number(raw);
+
+      if (!Number.isFinite(numeric) || numeric < 0) {
+        throw new Error(`Invalid price at ${group}/${code}/${currency}.`);
+      }
+
+      if (!prices[group][code]) {
+        prices[group][code] = {};
+      }
+
+      prices[group][code][currency] = currency === 'HUF'
+        ? Math.round(numeric)
+        : Math.round(numeric * 100) / 100;
+    });
+
+    const enabled = [];
+    if (currencyEurEl && currencyEurEl.checked) enabled.push('EUR');
+    if (currencyHufEl && currencyHufEl.checked) enabled.push('HUF');
+
+    if (enabled.length === 0) {
+      throw new Error('At least one payment currency must be enabled.');
+    }
+
+    const defaultCurrency = defaultCurrencyEl && enabled.includes(defaultCurrencyEl.value)
+      ? defaultCurrencyEl.value
+      : enabled[0];
+
+    return {
+      prices,
+      currencies: {
+        enabled,
+        default: defaultCurrency
+      }
+    };
+  }
+
+  async function savePricingSettings(event) {
+    event.preventDefault();
+    showPricingMessage('ok', 'Saving pricing settings...');
+
+    try {
+      const settings = collectPricingPayload();
+      const response = await fetch('/api/admin/pricing', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(settings)
+      });
+
+      if (response.status === 401) {
+        window.location.href = '/admin';
+        return;
+      }
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to save pricing settings.');
+      }
+
+      populatePricingForm(result.settings || settings);
+      showPricingMessage('ok', result.message || 'Pricing settings saved.');
+    } catch (error) {
+      showPricingMessage('error', error.message);
+    }
+  }
+
   async function loadData() {
     try {
-      const [statsRes, regsRes] = await Promise.all([fetch('/api/stats'), fetch('/api/registrations')]);
+      const [statsRes, regsRes, pricingRes] = await Promise.all([
+        fetch('/api/stats'),
+        fetch('/api/registrations'),
+        fetch('/api/admin/pricing')
+      ]);
 
-      if (statsRes.status === 401 || regsRes.status === 401) {
+      if (statsRes.status === 401 || regsRes.status === 401 || pricingRes.status === 401) {
         window.location.href = '/admin';
         return;
       }
 
       const statsData = await statsRes.json();
       const regsData = await regsRes.json();
+      const pricingData = await pricingRes.json();
 
-      if (!statsRes.ok || !regsRes.ok) {
+      if (!statsRes.ok || !regsRes.ok || !pricingRes.ok) {
         throw new Error('API error while loading admin data.');
       }
 
       renderStats(statsData.stats);
       renderRows(regsData.registrations || []);
+      populatePricingForm(pricingData.settings || {});
     } catch (error) {
       statsEl.innerHTML = `<div class="notice error">${error.message}</div>`;
       rowsEl.innerHTML = '<tr><td colspan="7">Failed to load data.</td></tr>';
+      showPricingMessage('error', 'Failed to load pricing settings.');
     }
   }
 
@@ -244,6 +407,18 @@
 
   if (exportCsvBtn) {
     exportCsvBtn.addEventListener('click', exportCsv);
+  }
+
+  if (pricingFormEl) {
+    pricingFormEl.addEventListener('submit', savePricingSettings);
+  }
+
+  if (currencyEurEl) {
+    currencyEurEl.addEventListener('change', syncDefaultCurrencyOptions);
+  }
+
+  if (currencyHufEl) {
+    currencyHufEl.addEventListener('change', syncDefaultCurrencyOptions);
   }
 
   rowsEl.addEventListener('click', (event) => {

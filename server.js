@@ -40,57 +40,257 @@ const EMAIL_FROM_NAME = String(process.env.EMAIL_FROM_NAME || 'Ishido Sensei - S
 const ADMIN_NOTIFY_EMAIL = String(process.env.ADMIN_NOTIFY_EMAIL || '').trim();
 const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
 const EMAIL_REQUEST_TIMEOUT_MS = 8000;
-
-const PRICE_OPTIONS = {
+const APP_SETTING_KEY_PRICING = 'pricing_settings_v1';
+const AVAILABLE_CURRENCIES = ['EUR', 'HUF'];
+const PRICE_CATALOG = {
   campType: {
-    iaido: { label: 'Iaido seminar', amountHuf: 149 },
-    jodo: { label: 'Jodo seminar', amountHuf: 149 },
-    both: { label: 'Iaido + Jodo seminar', amountHuf: 249 }
+    iaido: { label: 'Iaido seminar', defaultAmounts: { EUR: 149, HUF: 59000 } },
+    jodo: { label: 'Jodo seminar', defaultAmounts: { EUR: 149, HUF: 59000 } },
+    both: { label: 'Iaido + Jodo seminar', defaultAmounts: { EUR: 249, HUF: 99000 } }
   },
   mealPlan: {
-    none: { label: 'No meal', amountHuf: 0 },
-    lunch: { label: 'Lunch package', amountHuf: 33 },
-    full: { label: 'Full meal package', amountHuf: 60 }
+    none: { label: 'No meal', defaultAmounts: { EUR: 0, HUF: 0 } },
+    lunch: { label: 'Lunch package', defaultAmounts: { EUR: 33, HUF: 13000 } },
+    full: { label: 'Full meal package', defaultAmounts: { EUR: 60, HUF: 24000 } }
   },
   accommodation: {
-    none: { label: 'No accommodation', amountHuf: 0 },
-    dojo: { label: 'Dojo accommodation', amountHuf: 73 },
-    guesthouse: { label: 'Guesthouse', amountHuf: 135 }
+    none: { label: 'No accommodation', defaultAmounts: { EUR: 0, HUF: 0 } },
+    dojo: { label: 'Dojo accommodation', defaultAmounts: { EUR: 73, HUF: 29000 } },
+    guesthouse: { label: 'Guesthouse', defaultAmounts: { EUR: 135, HUF: 54000 } }
   }
 };
+
+function deepClone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function buildDefaultPricingSettings() {
+  const prices = {};
+  for (const [groupName, options] of Object.entries(PRICE_CATALOG)) {
+    prices[groupName] = {};
+    for (const [optionCode, option] of Object.entries(options)) {
+      prices[groupName][optionCode] = {
+        EUR: Number(option.defaultAmounts.EUR),
+        HUF: Number(option.defaultAmounts.HUF)
+      };
+    }
+  }
+
+  return {
+    prices,
+    currencies: {
+      enabled: [...AVAILABLE_CURRENCIES],
+      default: 'EUR'
+    }
+  };
+}
+
+const DEFAULT_PRICING_SETTINGS = buildDefaultPricingSettings();
+
+function normalizeMoneyAmount(value, currency) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num < 0) {
+    throw new Error(`Invalid amount for ${currency}.`);
+  }
+
+  if (currency === 'HUF') {
+    return Math.round(num);
+  }
+
+  return Math.round(num * 100) / 100;
+}
+
+function normalizeCurrencyList(values) {
+  const list = Array.isArray(values) ? values : [];
+  const normalized = [];
+
+  for (const raw of list) {
+    const code = String(raw || '').trim().toUpperCase();
+    if (!AVAILABLE_CURRENCIES.includes(code)) continue;
+    if (normalized.includes(code)) continue;
+    normalized.push(code);
+  }
+
+  return normalized;
+}
+
+function normalizePricingSettings(rawSettings, fallbackSettings = DEFAULT_PRICING_SETTINGS) {
+  const fallback = deepClone(fallbackSettings);
+  const raw = rawSettings && typeof rawSettings === 'object' ? rawSettings : {};
+
+  const normalized = {
+    prices: {},
+    currencies: {
+      enabled: [...fallback.currencies.enabled],
+      default: fallback.currencies.default
+    }
+  };
+
+  for (const [groupName, options] of Object.entries(PRICE_CATALOG)) {
+    normalized.prices[groupName] = {};
+    const rawGroup = raw.prices && typeof raw.prices[groupName] === 'object' ? raw.prices[groupName] : {};
+    for (const optionCode of Object.keys(options)) {
+      const rawOption = rawGroup[optionCode] && typeof rawGroup[optionCode] === 'object' ? rawGroup[optionCode] : {};
+      const fallbackOption = fallback.prices[groupName][optionCode];
+      normalized.prices[groupName][optionCode] = {
+        EUR: normalizeMoneyAmount(rawOption.EUR ?? fallbackOption.EUR, 'EUR'),
+        HUF: normalizeMoneyAmount(rawOption.HUF ?? fallbackOption.HUF, 'HUF')
+      };
+    }
+  }
+
+  const enabled = normalizeCurrencyList(raw.currencies?.enabled ?? fallback.currencies.enabled);
+  if (enabled.length === 0) {
+    throw new Error('At least one payment currency must be enabled.');
+  }
+
+  const requestedDefault = String((raw.currencies?.default ?? fallback.currencies.default) || '')
+    .trim()
+    .toUpperCase();
+  const defaultCurrency = enabled.includes(requestedDefault) ? requestedDefault : enabled[0];
+
+  normalized.currencies.enabled = enabled;
+  normalized.currencies.default = defaultCurrency;
+  return normalized;
+}
+
+function buildPublicPricingConfig(pricingSettings) {
+  const config = {};
+  for (const [groupName, options] of Object.entries(PRICE_CATALOG)) {
+    config[groupName] = {};
+    for (const [optionCode, option] of Object.entries(options)) {
+      const amounts = pricingSettings.prices[groupName][optionCode];
+      config[groupName][optionCode] = {
+        label: option.label,
+        amounts: {
+          EUR: amounts.EUR,
+          HUF: amounts.HUF
+        }
+      };
+    }
+  }
+  return config;
+}
+
+const PRICE_OPTIONS = buildPublicPricingConfig(DEFAULT_PRICING_SETTINGS);
+
+function loadPricingSettings(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+
+  const select = db.prepare('SELECT value FROM app_settings WHERE key = ?');
+  const row = select.get(APP_SETTING_KEY_PRICING);
+  if (!row || !row.value) {
+    const defaults = deepClone(DEFAULT_PRICING_SETTINGS);
+    savePricingSettings(db, defaults);
+    return defaults;
+  }
+
+  try {
+    const parsed = JSON.parse(String(row.value));
+    return normalizePricingSettings(parsed, DEFAULT_PRICING_SETTINGS);
+  } catch {
+    const defaults = deepClone(DEFAULT_PRICING_SETTINGS);
+    savePricingSettings(db, defaults);
+    return defaults;
+  }
+}
+
+function savePricingSettings(db, nextSettings) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+
+  const normalized = normalizePricingSettings(nextSettings, DEFAULT_PRICING_SETTINGS);
+  const upsert = db.prepare(`
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      value = excluded.value,
+      updated_at = excluded.updated_at
+  `);
+
+  upsert.run(
+    APP_SETTING_KEY_PRICING,
+    JSON.stringify(normalized),
+    new Date().toISOString()
+  );
+
+  return normalized;
+}
+
+function getEnabledCurrencyMap(pricingSettings) {
+  return pricingSettings.currencies.enabled.reduce((acc, code) => {
+    acc[code] = true;
+    return acc;
+  }, {});
+}
+
+function resolvePaymentCurrency(value, pricingSettings) {
+  const allowed = getEnabledCurrencyMap(pricingSettings);
+  return toEnumValue(value, allowed, pricingSettings.currencies.default);
+}
 
 function toEnumValue(value, allowedValues, fallbackValue) {
   const normalized = String(value || '').trim();
   return Object.prototype.hasOwnProperty.call(allowedValues, normalized) ? normalized : fallbackValue;
 }
 
-function calculatePricing(selection) {
-  const campType = toEnumValue(selection.campType, PRICE_OPTIONS.campType, 'iaido');
-  const mealPlan = toEnumValue(selection.mealPlan, PRICE_OPTIONS.mealPlan, 'none');
-  const accommodation = toEnumValue(selection.accommodation, PRICE_OPTIONS.accommodation, 'none');
+function calculatePricing(selection, pricingSettings = DEFAULT_PRICING_SETTINGS) {
+  const campType = toEnumValue(selection.campType, pricingSettings.prices.campType, 'iaido');
+  const mealPlan = toEnumValue(selection.mealPlan, pricingSettings.prices.mealPlan, 'none');
+  const accommodation = toEnumValue(selection.accommodation, pricingSettings.prices.accommodation, 'none');
+  const currency = resolvePaymentCurrency(selection.paymentCurrency, pricingSettings);
 
   const lineItems = [
-    { key: 'campType', code: campType, ...PRICE_OPTIONS.campType[campType] },
-    { key: 'mealPlan', code: mealPlan, ...PRICE_OPTIONS.mealPlan[mealPlan] },
-    { key: 'accommodation', code: accommodation, ...PRICE_OPTIONS.accommodation[accommodation] }
+    {
+      key: 'campType',
+      code: campType,
+      label: PRICE_CATALOG.campType[campType].label,
+      amount: pricingSettings.prices.campType[campType][currency]
+    },
+    {
+      key: 'mealPlan',
+      code: mealPlan,
+      label: PRICE_CATALOG.mealPlan[mealPlan].label,
+      amount: pricingSettings.prices.mealPlan[mealPlan][currency]
+    },
+    {
+      key: 'accommodation',
+      code: accommodation,
+      label: PRICE_CATALOG.accommodation[accommodation].label,
+      amount: pricingSettings.prices.accommodation[accommodation][currency]
+    }
   ];
 
-  const totalHuf = lineItems.reduce((sum, item) => sum + item.amountHuf, 0);
+  const totalAmount = lineItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
   return {
-    selection: { campType, mealPlan, accommodation },
-    lineItems,
-    totalHuf,
-    currency: 'EUR'
+    selection: { campType, mealPlan, accommodation, paymentCurrency: currency },
+    lineItems: lineItems.map((item) => ({ ...item, amountHuf: item.amount })),
+    total: totalAmount,
+    totalAmount,
+    totalHuf: totalAmount,
+    currency
   };
 }
 
 function formatCurrency(value, currency = 'EUR') {
+  const fractionDigits = currency === 'HUF' ? 0 : 2;
   return new Intl.NumberFormat('en-IE', {
     style: 'currency',
     currency,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits
   }).format(Number(value || 0));
 }
 
@@ -153,9 +353,13 @@ function buildRegistrationEmailContent(registration, pricing) {
   const registrationId = escapeHtml(registration.id || '');
   const createdAt = escapeHtml(new Date(registration.createdAt).toLocaleString('en-GB'));
   const pricingRows = pricing.lineItems
-    .map((item) => `<li>${escapeHtml(item.label)}: <strong>${escapeHtml(formatCurrency(item.amountHuf, pricing.currency))}</strong></li>`)
+    .map((item) => {
+      const amount = Number(item.amount ?? item.amountHuf ?? 0);
+      return `<li>${escapeHtml(item.label)}: <strong>${escapeHtml(formatCurrency(amount, pricing.currency))}</strong></li>`;
+    })
     .join('');
-  const total = escapeHtml(formatCurrency(pricing.totalHuf, pricing.currency));
+  const totalRaw = Number(pricing.total ?? pricing.totalAmount ?? pricing.totalHuf ?? 0);
+  const total = escapeHtml(formatCurrency(totalRaw, pricing.currency));
   const manageUrl = `${APP_BASE_URL}/admin`;
 
   const participantHtml = `
@@ -178,8 +382,11 @@ function buildRegistrationEmailContent(registration, pricing) {
     `Registration ID: ${registration.id}`,
     `Date: ${new Date(registration.createdAt).toLocaleString('en-GB')}`,
     'Selected options:',
-    ...pricing.lineItems.map((item) => `- ${item.label}: ${formatCurrency(item.amountHuf, pricing.currency)}`),
-    `Total: ${formatCurrency(pricing.totalHuf, pricing.currency)}`,
+    ...pricing.lineItems.map((item) => {
+      const amount = Number(item.amount ?? item.amountHuf ?? 0);
+      return `- ${item.label}: ${formatCurrency(amount, pricing.currency)}`;
+    }),
+    `Total: ${formatCurrency(totalRaw, pricing.currency)}`,
     'This is a confirmation from the demo system. Payment flow is currently in integration mode.'
   ].join('\n');
 
@@ -197,7 +404,7 @@ function buildRegistrationEmailContent(registration, pricing) {
     `Name: ${registration.fullName}`,
     `Email: ${registration.email}`,
     `Registration ID: ${registration.id}`,
-    `Total: ${formatCurrency(pricing.totalHuf, pricing.currency)}`,
+    `Total: ${formatCurrency(totalRaw, pricing.currency)}`,
     `Open admin panel: ${manageUrl}`
   ].join('\n');
 
@@ -308,6 +515,12 @@ function initDatabase() {
 
     CREATE INDEX IF NOT EXISTS idx_registrations_created_at ON registrations(created_at);
     CREATE INDEX IF NOT EXISTS idx_registrations_status ON registrations(status);
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   ensureRegistrationColumns(db);
@@ -425,7 +638,8 @@ function migrateLegacyJsonIfNeeded(db) {
       const pricing = calculatePricing({
         campType: item.campType || 'iaido',
         mealPlan: item.mealPlan || 'none',
-        accommodation: item.accommodation || 'none'
+        accommodation: item.accommodation || 'none',
+        paymentCurrency: String(item.currency || 'EUR').toUpperCase()
       });
       const wantsExamIaido = Boolean(item.wantsExamIaido ?? item.wantsExam);
       const wantsExamJodo = Boolean(item.wantsExamJodo);
@@ -441,7 +655,7 @@ function migrateLegacyJsonIfNeeded(db) {
         item.id || `reg_${randomUUID()}`,
         item.createdAt || new Date().toISOString(),
         item.status || 'PENDING_PAYMENT',
-        Number(item.amountHuf || pricing.totalHuf),
+        Number(item.amount ?? item.amountHuf ?? pricing.totalAmount ?? pricing.totalHuf),
         item.currency || pricing.currency,
         String(item.fullName || ''),
         String(item.email || ''),
@@ -501,7 +715,8 @@ function mapRegistrationRow(row) {
     id: row.id,
     createdAt: row.created_at,
     status: row.status,
-    amountHuf: row.amount_huf,
+    amount: Number(row.amount_huf || 0),
+    amountHuf: Number(row.amount_huf || 0),
     currency: row.currency,
     fullName: row.full_name,
     email: row.email,
@@ -567,7 +782,7 @@ function insertRegistration(db, registration) {
     registration.id,
     registration.createdAt,
     registration.status,
-    registration.amountHuf,
+    Number(registration.amount ?? registration.amountHuf ?? 0),
     registration.currency,
     registration.fullName,
     registration.email,
@@ -705,14 +920,15 @@ function isValidPhone(value) {
   return typeof value === 'string' && /^[+()\-\s0-9]{7,20}$/.test(value.trim());
 }
 
-function sanitizePayload(payload) {
+function sanitizePayload(payload, pricingSettings = DEFAULT_PRICING_SETTINGS) {
   const fallbackTargetGradeIaido = payload.targetGradeIaido ?? payload.targetGrade ?? '';
   const fallbackCurrentGradeIaido = payload.currentGradeIaido ?? payload.currentGrade ?? '';
   const wantsExamIaido = Boolean(payload.wantsExamIaido ?? payload.wantsExam);
   const wantsExamJodo = Boolean(payload.wantsExamJodo);
-  const campType = toEnumValue(payload.campType, PRICE_OPTIONS.campType, 'iaido');
-  const mealPlan = toEnumValue(payload.mealPlan, PRICE_OPTIONS.mealPlan, 'none');
-  const accommodation = toEnumValue(payload.accommodation, PRICE_OPTIONS.accommodation, 'none');
+  const campType = toEnumValue(payload.campType, pricingSettings.prices.campType, 'iaido');
+  const mealPlan = toEnumValue(payload.mealPlan, pricingSettings.prices.mealPlan, 'none');
+  const accommodation = toEnumValue(payload.accommodation, pricingSettings.prices.accommodation, 'none');
+  const paymentCurrency = resolvePaymentCurrency(payload.paymentCurrency, pricingSettings);
 
   return {
     fullName: String(payload.fullName || '').trim(),
@@ -725,6 +941,7 @@ function sanitizePayload(payload) {
     campType,
     mealPlan,
     accommodation,
+    paymentCurrency,
     wantsExamIaido,
     targetGradeIaido: wantsExamIaido ? String(fallbackTargetGradeIaido).trim() : '',
     wantsExamJodo,
@@ -740,7 +957,7 @@ function sanitizePayload(payload) {
   };
 }
 
-function validateRegistration(data) {
+function validateRegistration(data, pricingSettings = DEFAULT_PRICING_SETTINGS) {
   const errors = [];
 
   if (!isNonEmptyString(data.fullName)) errors.push('Full name is required.');
@@ -756,14 +973,17 @@ function validateRegistration(data) {
   if (needsJodoGrade && !isNonEmptyString(data.currentGradeJodo)) {
     errors.push('Current Jodo grade is required for the selected option.');
   }
-  if (!Object.prototype.hasOwnProperty.call(PRICE_OPTIONS.campType, data.campType)) {
+  if (!Object.prototype.hasOwnProperty.call(pricingSettings.prices.campType, data.campType)) {
     errors.push('Invalid seminar selection.');
   }
-  if (!Object.prototype.hasOwnProperty.call(PRICE_OPTIONS.mealPlan, data.mealPlan)) {
+  if (!Object.prototype.hasOwnProperty.call(pricingSettings.prices.mealPlan, data.mealPlan)) {
     errors.push('Invalid meal option.');
   }
-  if (!Object.prototype.hasOwnProperty.call(PRICE_OPTIONS.accommodation, data.accommodation)) {
+  if (!Object.prototype.hasOwnProperty.call(pricingSettings.prices.accommodation, data.accommodation)) {
     errors.push('Invalid accommodation option.');
+  }
+  if (!pricingSettings.currencies.enabled.includes(data.paymentCurrency)) {
+    errors.push('Invalid payment currency.');
   }
 
   if (data.wantsExamIaido && !isNonEmptyString(data.targetGradeIaido)) {
@@ -824,10 +1044,10 @@ function buildCsvExport(registrations) {
     'target_grade_iaido',
     'wants_exam_jodo',
     'target_grade_jodo',
-    'camp_price_eur',
-    'meal_price_eur',
-    'accommodation_price_eur',
-    'amount_eur',
+    'camp_price',
+    'meal_price',
+    'accommodation_price',
+    'amount',
     'currency',
     'billing_full_name',
     'billing_zip',
@@ -850,9 +1070,12 @@ function buildCsvExport(registrations) {
       ? registration.priceBreakdown.lineItems
       : [];
 
-    const campPrice = lineItems.find((item) => item.key === 'campType')?.amountHuf ?? '';
-    const mealPrice = lineItems.find((item) => item.key === 'mealPlan')?.amountHuf ?? '';
-    const accommodationPrice = lineItems.find((item) => item.key === 'accommodation')?.amountHuf ?? '';
+    const campItem = lineItems.find((item) => item.key === 'campType');
+    const mealItem = lineItems.find((item) => item.key === 'mealPlan');
+    const accommodationItem = lineItems.find((item) => item.key === 'accommodation');
+    const campPrice = campItem?.amount ?? campItem?.amountHuf ?? '';
+    const mealPrice = mealItem?.amount ?? mealItem?.amountHuf ?? '';
+    const accommodationPrice = accommodationItem?.amount ?? accommodationItem?.amountHuf ?? '';
 
     const row = [
       registration.id,
@@ -874,7 +1097,7 @@ function buildCsvExport(registrations) {
       campPrice,
       mealPrice,
       accommodationPrice,
-      registration.amountHuf,
+      registration.amount ?? registration.amountHuf,
       registration.currency,
       registration.billingFullName,
       registration.billingZip,
@@ -1023,7 +1246,12 @@ function getStats(registrations) {
   const wantsExamTotal = activeRegistrations.filter((r) => r.wantsExamIaido || r.wantsExamJodo).length;
   const pendingPayment = activeRegistrations.filter((r) => r.status === 'PENDING_PAYMENT').length;
   const paid = activeRegistrations.filter((r) => r.status === 'PAID').length;
-  const projectedRevenueHuf = activeRegistrations.reduce((sum, current) => sum + Number(current.amountHuf || 0), 0);
+  const projectedRevenueByCurrency = activeRegistrations.reduce((acc, current) => {
+    const code = String(current.currency || 'EUR').toUpperCase();
+    const amount = Number(current.amount ?? current.amountHuf ?? 0);
+    acc[code] = (acc[code] || 0) + amount;
+    return acc;
+  }, {});
 
   const byCampType = activeRegistrations.reduce((acc, current) => {
     acc[current.campType] = (acc[current.campType] || 0) + 1;
@@ -1071,7 +1299,9 @@ function getStats(registrations) {
     wantsExamTotal,
     pendingPayment,
     paid,
-    projectedRevenueHuf,
+    projectedRevenueByCurrency,
+    projectedRevenueHuf: projectedRevenueByCurrency.HUF || 0,
+    projectedRevenueEur: projectedRevenueByCurrency.EUR || 0,
     byCampType,
     iaidoApplicants,
     jodoApplicants,
@@ -1111,13 +1341,17 @@ function getStaticFilePath(urlPath) {
 
 function createServer(options = {}) {
   const db = options.db || initDatabase();
+  let pricingSettings = loadPricingSettings(db);
 
   return http.createServer(async (req, res) => {
     const reqUrl = new URL(req.url, `http://${req.headers.host}`);
     const { pathname } = reqUrl;
 
     if (req.method === 'GET' && pathname === '/api/pricing') {
-      sendJson(res, 200, { pricing: PRICE_OPTIONS });
+      sendJson(res, 200, {
+        pricing: buildPublicPricingConfig(pricingSettings),
+        currencies: pricingSettings.currencies
+      });
       return;
     }
 
@@ -1129,6 +1363,53 @@ function createServer(options = {}) {
 
     if (req.method === 'GET' && pathname === '/api/admin/session') {
       sendJson(res, 200, { authenticated: isAdminAuthenticated(req) });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/admin/pricing') {
+      if (!isAdminAuthenticated(req)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      sendJson(res, 200, {
+        settings: pricingSettings,
+        pricing: buildPublicPricingConfig(pricingSettings),
+        currencies: pricingSettings.currencies
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/admin/pricing') {
+      if (!isAdminAuthenticated(req)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      try {
+        const body = await parseJsonBody(req);
+        const incomingSettings = body?.settings && typeof body.settings === 'object' ? body.settings : body;
+        const nextPricingSettings = normalizePricingSettings(incomingSettings, pricingSettings);
+
+        await runWithSqliteRetry(() => {
+          savePricingSettings(db, nextPricingSettings);
+          return true;
+        });
+
+        pricingSettings = nextPricingSettings;
+        sendJson(res, 200, {
+          message: 'Pricing settings saved.',
+          settings: pricingSettings,
+          pricing: buildPublicPricingConfig(pricingSettings),
+          currencies: pricingSettings.currencies
+        });
+      } catch (error) {
+        if (isSqliteBusyError(error)) {
+          sendJson(res, 503, { error: 'Database is currently busy. Please try again in a few seconds.' });
+          return;
+        }
+        sendJson(res, 400, { error: error.message || 'Invalid request' });
+      }
       return;
     }
 
@@ -1264,8 +1545,8 @@ function createServer(options = {}) {
     if (req.method === 'POST' && pathname === '/api/register') {
       try {
         const body = await parseJsonBody(req);
-        const cleanBody = sanitizePayload(body);
-        const errors = validateRegistration(cleanBody);
+        const cleanBody = sanitizePayload(body, pricingSettings);
+        const errors = validateRegistration(cleanBody, pricingSettings);
 
         if (errors.length > 0) {
           sendJson(res, 400, { errors });
@@ -1275,14 +1556,16 @@ function createServer(options = {}) {
         const pricing = calculatePricing({
           campType: cleanBody.campType,
           mealPlan: cleanBody.mealPlan,
-          accommodation: cleanBody.accommodation
-        });
+          accommodation: cleanBody.accommodation,
+          paymentCurrency: cleanBody.paymentCurrency
+        }, pricingSettings);
 
         const newRegistration = {
           id: `reg_${randomUUID()}`,
           createdAt: new Date().toISOString(),
           status: 'PENDING_PAYMENT',
-          amountHuf: pricing.totalHuf,
+          amount: pricing.totalAmount,
+          amountHuf: pricing.totalAmount,
           currency: pricing.currency,
           priceBreakdown: pricing,
           privacyPolicyVersion: PRIVACY_POLICY_VERSION,

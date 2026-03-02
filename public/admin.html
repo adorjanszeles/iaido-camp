@@ -27,6 +27,98 @@
         </section>
 
         <section class="card">
+          <h2>Pricing settings</h2>
+          <p class="subtitle">Update package prices and choose which payment currencies are available on registration.</p>
+          <form id="pricing-form" novalidate>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Option</th>
+                    <th>EUR</th>
+                    <th>HUF</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Iaido seminar</td>
+                    <td><input data-price-group="campType" data-price-code="iaido" data-currency="EUR" inputmode="decimal" /></td>
+                    <td><input data-price-group="campType" data-price-code="iaido" data-currency="HUF" inputmode="numeric" /></td>
+                  </tr>
+                  <tr>
+                    <td>Jodo seminar</td>
+                    <td><input data-price-group="campType" data-price-code="jodo" data-currency="EUR" inputmode="decimal" /></td>
+                    <td><input data-price-group="campType" data-price-code="jodo" data-currency="HUF" inputmode="numeric" /></td>
+                  </tr>
+                  <tr>
+                    <td>Iaido + Jodo seminar</td>
+                    <td><input data-price-group="campType" data-price-code="both" data-currency="EUR" inputmode="decimal" /></td>
+                    <td><input data-price-group="campType" data-price-code="both" data-currency="HUF" inputmode="numeric" /></td>
+                  </tr>
+                  <tr>
+                    <td>No meal</td>
+                    <td><input data-price-group="mealPlan" data-price-code="none" data-currency="EUR" inputmode="decimal" /></td>
+                    <td><input data-price-group="mealPlan" data-price-code="none" data-currency="HUF" inputmode="numeric" /></td>
+                  </tr>
+                  <tr>
+                    <td>Lunch package</td>
+                    <td><input data-price-group="mealPlan" data-price-code="lunch" data-currency="EUR" inputmode="decimal" /></td>
+                    <td><input data-price-group="mealPlan" data-price-code="lunch" data-currency="HUF" inputmode="numeric" /></td>
+                  </tr>
+                  <tr>
+                    <td>Full meal package</td>
+                    <td><input data-price-group="mealPlan" data-price-code="full" data-currency="EUR" inputmode="decimal" /></td>
+                    <td><input data-price-group="mealPlan" data-price-code="full" data-currency="HUF" inputmode="numeric" /></td>
+                  </tr>
+                  <tr>
+                    <td>No accommodation</td>
+                    <td><input data-price-group="accommodation" data-price-code="none" data-currency="EUR" inputmode="decimal" /></td>
+                    <td><input data-price-group="accommodation" data-price-code="none" data-currency="HUF" inputmode="numeric" /></td>
+                  </tr>
+                  <tr>
+                    <td>Dojo accommodation</td>
+                    <td><input data-price-group="accommodation" data-price-code="dojo" data-currency="EUR" inputmode="decimal" /></td>
+                    <td><input data-price-group="accommodation" data-price-code="dojo" data-currency="HUF" inputmode="numeric" /></td>
+                  </tr>
+                  <tr>
+                    <td>Guesthouse</td>
+                    <td><input data-price-group="accommodation" data-price-code="guesthouse" data-currency="EUR" inputmode="decimal" /></td>
+                    <td><input data-price-group="accommodation" data-price-code="guesthouse" data-currency="HUF" inputmode="numeric" /></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="form-grid" style="margin-top: 0.8rem;">
+              <div class="field">
+                <label>Enabled payment currencies</label>
+                <label class="checkline" for="currency-eur">
+                  <input id="currency-eur" type="checkbox" />
+                  <span>EUR</span>
+                </label>
+                <label class="checkline" for="currency-huf">
+                  <input id="currency-huf" type="checkbox" />
+                  <span>HUF</span>
+                </label>
+              </div>
+
+              <div class="field">
+                <label for="default-currency">Default payment currency</label>
+                <select id="default-currency">
+                  <option value="EUR">EUR</option>
+                  <option value="HUF">HUF</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="cta-row">
+              <button class="btn primary" id="save-pricing-btn" type="submit">Save pricing settings</button>
+            </div>
+            <div id="pricing-message" aria-live="polite"></div>
+          </form>
+        </section>
+
+        <section class="card">
           <h2>Registrations</h2>
           <div class="table-wrap">
             <table>

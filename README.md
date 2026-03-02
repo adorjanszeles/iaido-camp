@@ -14,7 +14,8 @@ Ez a projekt egy ideiglenes tábori weboldal demó:
 - Regisztrációs űrlap a kért mezőkkel
 - Csomagválasztás: `Iaido` / `Jodo` / `Iaido + Jodo`
 - Opcionális étkezés és szállás választás
-- Élő árkalkuláció a jelentkezési oldalon
+- Választható fizetési pénznem a regisztráción (`EUR` / `HUF`)
+- Élő árkalkuláció a jelentkezési oldalon a választott pénznemben
 - Magánszemély számlázási adatok bekérése
 - Külön Iaido/Jodo fokozat + külön Iaido/Jodo vizsgaszándék + célfokozat
 - Szerveroldali validáció
@@ -22,6 +23,7 @@ Ez a projekt egy ideiglenes tábori weboldal demó:
 - SQLite terheléskezelés: `busy_timeout` + automatikus retry íráskor
 - Admin felület bejelentkezéssel védve (`/admin`)
 - Admin statok Iaido/Jodo bontással
+- Admin árbeállítások (EUR/HUF árak + engedélyezett pénznemek + alapértelmezett pénznem)
 - Jelentkezői opciók részletes megjelenítése az admin táblában
 - Jelentkezés státusz alapú törlése (`DELETED`, sor megtartásával)
 - GDPR anonimizálás adminból (`ANONYMIZED`, személyes adatok tisztítása)
@@ -56,6 +58,8 @@ APP_BASE_URL=https://your-domain.com
 
 A fenti integrációkhoz stub API végpontok már elérhetők:
 - `GET /api/pricing`
+- `GET /api/admin/pricing`
+- `POST /api/admin/pricing`
 - `POST /api/admin/registrations/mark-deleted`
 - `POST /api/admin/registrations/anonymize`
 - `GET /api/admin/export.csv`

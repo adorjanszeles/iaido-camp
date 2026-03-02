@@ -413,6 +413,11 @@ th {
   color: var(--accent-strong);
 }
 
+#pricing-form table input {
+  width: 100%;
+  min-width: 7rem;
+}
+
 footer {
   margin-top: auto;
   border-top: 1px solid rgba(35, 73, 111, 0.2);
