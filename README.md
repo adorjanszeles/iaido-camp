@@ -14,8 +14,8 @@ Ez a projekt egy ideiglenes tábori weboldal demó:
 - Regisztrációs űrlap a kért mezőkkel
 - Csomagválasztás: `Iaido` / `Jodo` / `Iaido + Jodo`
 - Opcionális étkezés és szállás választás
-- Választható fizetési pénznem a regisztráción (`EUR` / `HUF`)
-- Élő árkalkuláció a jelentkezési oldalon a választott pénznemben
+- Fizetés kizárólag EUR pénznemben
+- Élő árkalkuláció a jelentkezési oldalon (EUR)
 - Magánszemély számlázási adatok bekérése
 - Külön Iaido/Jodo fokozat + külön Iaido/Jodo vizsgaszándék + célfokozat
 - Szerveroldali validáció
@@ -23,7 +23,7 @@ Ez a projekt egy ideiglenes tábori weboldal demó:
 - SQLite terheléskezelés: `busy_timeout` + automatikus retry íráskor
 - Admin felület bejelentkezéssel védve (`/admin`)
 - Admin statok Iaido/Jodo bontással
-- Admin árbeállítások (EUR/HUF árak + engedélyezett pénznemek + alapértelmezett pénznem)
+- Admin árbeállítások (EUR árak)
 - Jelentkezői opciók részletes megjelenítése az admin táblában
 - Jelentkezés státusz alapú törlése (`DELETED`, sor megtartásával)
 - GDPR anonimizálás adminból (`ANONYMIZED`, személyes adatok tisztítása)

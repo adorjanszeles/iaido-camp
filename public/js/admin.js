@@ -5,35 +5,21 @@
   const exportCsvBtn = document.getElementById('export-csv-btn');
   const pricingFormEl = document.getElementById('pricing-form');
   const pricingMessageEl = document.getElementById('pricing-message');
-  const currencyEurEl = document.getElementById('currency-eur');
-  const currencyHufEl = document.getElementById('currency-huf');
-  const defaultCurrencyEl = document.getElementById('default-currency');
 
   const labels = {
     campType: {
       iaido: 'Iaido',
       jodo: 'Jodo',
       both: 'Iaido + Jodo'
-    },
-    mealPlan: {
-      none: 'No meal',
-      lunch: 'Lunch',
-      full: 'Full meal'
-    },
-    accommodation: {
-      none: 'No accommodation',
-      dojo: 'Dojo',
-      guesthouse: 'Guesthouse'
     }
   };
 
   function formatCurrency(value, currency = 'EUR') {
-    const decimals = currency === 'HUF' ? 0 : 2;
     return new Intl.NumberFormat('en-IE', {
       style: 'currency',
       currency,
-      minimumFractionDigits: decimals,
-      maximumFractionDigits: decimals
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
     }).format(Number(value || 0));
   }
 
@@ -47,20 +33,7 @@
   }
 
   function renderStats(stats) {
-    const revenueByCurrency = stats.projectedRevenueByCurrency && typeof stats.projectedRevenueByCurrency === 'object'
-      ? stats.projectedRevenueByCurrency
-      : {};
-
-    const revenueCards = [];
-    if (Object.prototype.hasOwnProperty.call(revenueByCurrency, 'EUR')) {
-      revenueCards.push(renderStatCard('Projected revenue (EUR)', formatCurrency(revenueByCurrency.EUR, 'EUR')));
-    }
-    if (Object.prototype.hasOwnProperty.call(revenueByCurrency, 'HUF')) {
-      revenueCards.push(renderStatCard('Projected revenue (HUF)', formatCurrency(revenueByCurrency.HUF, 'HUF')));
-    }
-    if (revenueCards.length === 0) {
-      revenueCards.push(renderStatCard('Projected revenue', formatCurrency(0, 'EUR')));
-    }
+    const projectedRevenue = Number(stats.projectedRevenueEur || 0);
 
     statsEl.innerHTML = [
       renderStatCard('Active registrations', stats.total),
@@ -70,7 +43,7 @@
       renderStatCard('Anonymized', stats.anonymizedCount || 0),
       renderStatCard('Iaido exam applicants', stats.wantsExamIaido || 0),
       renderStatCard('Jodo exam applicants', stats.wantsExamJodo || 0),
-      ...revenueCards
+      renderStatCard('Projected revenue (EUR)', formatCurrency(projectedRevenue, 'EUR'))
     ].join('');
   }
 
@@ -80,8 +53,6 @@
   }
 
   function buildOptionsText(item) {
-    const meal = formatOption('mealPlan', item.mealPlan);
-    const accommodation = formatOption('accommodation', item.accommodation);
     const gradeIaido = `Iaido grade: ${item.currentGradeIaido || '-'}`;
     const gradeJodo = `Jodo grade: ${item.currentGradeJodo || '-'}`;
     const examIaido = item.wantsExamIaido
@@ -90,7 +61,7 @@
     const examJodo = item.wantsExamJodo
       ? `Jodo exam: yes (${item.targetGradeJodo || '-'})`
       : 'Jodo exam: no';
-    return `${meal} / ${accommodation}<br /><span class="helper">${gradeIaido} | ${gradeJodo}<br />${examIaido} | ${examJodo}</span>`;
+    return `<span class="helper">${gradeIaido} | ${gradeJodo}<br />${examIaido} | ${examJodo}</span>`;
   }
 
   function renderRows(registrations) {
@@ -136,47 +107,17 @@
     pricingMessageEl.textContent = text;
   }
 
-  function syncDefaultCurrencyOptions() {
-    if (!defaultCurrencyEl) return;
-
-    const enabled = [];
-    if (currencyEurEl && currencyEurEl.checked) enabled.push('EUR');
-    if (currencyHufEl && currencyHufEl.checked) enabled.push('HUF');
-
-    Array.from(defaultCurrencyEl.options).forEach((option) => {
-      option.disabled = !enabled.includes(option.value);
-    });
-
-    if (enabled.length > 0 && !enabled.includes(defaultCurrencyEl.value)) {
-      defaultCurrencyEl.value = enabled[0];
-    }
-  }
-
   function populatePricingForm(settings) {
     if (!pricingFormEl || !settings || typeof settings !== 'object') return;
 
-    const inputs = pricingFormEl.querySelectorAll('[data-price-group][data-price-code][data-currency]');
+    const inputs = pricingFormEl.querySelectorAll('[data-price-group][data-price-code]');
     inputs.forEach((input) => {
       const group = input.getAttribute('data-price-group');
       const code = input.getAttribute('data-price-code');
-      const currency = input.getAttribute('data-currency');
-      const amount = settings?.prices?.[group]?.[code]?.[currency];
+      const amount = settings?.prices?.[group]?.[code];
       input.value = Number.isFinite(Number(amount)) ? String(amount) : '';
     });
 
-    const enabled = Array.isArray(settings?.currencies?.enabled)
-      ? settings.currencies.enabled.map((value) => String(value || '').toUpperCase())
-      : ['EUR'];
-
-    if (currencyEurEl) currencyEurEl.checked = enabled.includes('EUR');
-    if (currencyHufEl) currencyHufEl.checked = enabled.includes('HUF');
-
-    const defaultCurrency = String(settings?.currencies?.default || '').toUpperCase();
-    if (defaultCurrencyEl) {
-      defaultCurrencyEl.value = defaultCurrency === 'HUF' ? 'HUF' : 'EUR';
-    }
-
-    syncDefaultCurrencyOptions();
     showPricingMessage('ok', 'Pricing settings loaded.');
   }
 
@@ -186,51 +127,24 @@
     }
 
     const prices = {
-      campType: {},
-      mealPlan: {},
-      accommodation: {}
+      campType: {}
     };
 
-    const inputs = pricingFormEl.querySelectorAll('[data-price-group][data-price-code][data-currency]');
+    const inputs = pricingFormEl.querySelectorAll('[data-price-group][data-price-code]');
     inputs.forEach((input) => {
       const group = input.getAttribute('data-price-group');
       const code = input.getAttribute('data-price-code');
-      const currency = input.getAttribute('data-currency');
       const raw = String(input.value || '').trim();
       const numeric = Number(raw);
 
       if (!Number.isFinite(numeric) || numeric < 0) {
-        throw new Error(`Invalid price at ${group}/${code}/${currency}.`);
+        throw new Error(`Invalid price at ${group}/${code}.`);
       }
 
-      if (!prices[group][code]) {
-        prices[group][code] = {};
-      }
-
-      prices[group][code][currency] = currency === 'HUF'
-        ? Math.round(numeric)
-        : Math.round(numeric * 100) / 100;
+      prices[group][code] = Math.round(numeric * 100) / 100;
     });
 
-    const enabled = [];
-    if (currencyEurEl && currencyEurEl.checked) enabled.push('EUR');
-    if (currencyHufEl && currencyHufEl.checked) enabled.push('HUF');
-
-    if (enabled.length === 0) {
-      throw new Error('At least one payment currency must be enabled.');
-    }
-
-    const defaultCurrency = defaultCurrencyEl && enabled.includes(defaultCurrencyEl.value)
-      ? defaultCurrencyEl.value
-      : enabled[0];
-
-    return {
-      prices,
-      currencies: {
-        enabled,
-        default: defaultCurrency
-      }
-    };
+    return { prices };
   }
 
   async function savePricingSettings(event) {
@@ -411,14 +325,6 @@
 
   if (pricingFormEl) {
     pricingFormEl.addEventListener('submit', savePricingSettings);
-  }
-
-  if (currencyEurEl) {
-    currencyEurEl.addEventListener('change', syncDefaultCurrencyOptions);
-  }
-
-  if (currencyHufEl) {
-    currencyHufEl.addEventListener('change', syncDefaultCurrencyOptions);
   }
 
   rowsEl.addEventListener('click', (event) => {

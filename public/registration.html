@@ -47,8 +47,16 @@
             </div>
 
             <div class="field">
-              <label for="dateOfBirth">Date of birth</label>
-              <input id="dateOfBirth" name="dateOfBirth" type="date" />
+              <label for="dateOfBirth">Date of birth (yyyy.mm.dd)</label>
+              <input
+                id="dateOfBirth"
+                name="dateOfBirth"
+                type="text"
+                inputmode="numeric"
+                placeholder="yyyy.mm.dd"
+                pattern="^\d{4}\.\d{2}\.\d{2}$"
+                title="Please use this format: yyyy.mm.dd"
+              />
             </div>
 
             <div class="field">
@@ -63,16 +71,17 @@
               <label for="currentGradeIaido">Current Iaido grade</label>
               <select id="currentGradeIaido" name="currentGradeIaido">
                 <option value="">Select grade</option>
-                <option>6. kyu</option>
-                <option>5. kyu</option>
-                <option>4. kyu</option>
-                <option>3. kyu</option>
+                <option>Mukyu</option>
                 <option>2. kyu</option>
                 <option>1. kyu</option>
                 <option>1. dan</option>
                 <option>2. dan</option>
                 <option>3. dan</option>
-                <option>4. dan+</option>
+                <option>4. dan</option>
+                <option>5. dan</option>
+                <option>6. dan</option>
+                <option>7. dan</option>
+                <option>8. dan</option>
               </select>
             </div>
             <div class="field full">
@@ -86,14 +95,13 @@
               <label for="targetGradeIaido">Iaido target grade (if taking exam)</label>
               <select id="targetGradeIaido" name="targetGradeIaido" disabled>
                 <option value="">Select target grade</option>
-                <option>5. kyu</option>
-                <option>4. kyu</option>
-                <option>3. kyu</option>
                 <option>2. kyu</option>
                 <option>1. kyu</option>
                 <option>1. dan</option>
                 <option>2. dan</option>
                 <option>3. dan</option>
+                <option>4. dan</option>
+                <option>5. dan</option>
               </select>
             </div>
           </div>
@@ -104,16 +112,17 @@
               <label for="currentGradeJodo">Current Jodo grade</label>
               <select id="currentGradeJodo" name="currentGradeJodo">
                 <option value="">Select grade</option>
-                <option>6. kyu</option>
-                <option>5. kyu</option>
-                <option>4. kyu</option>
-                <option>3. kyu</option>
+                <option>Mukyu</option>
                 <option>2. kyu</option>
                 <option>1. kyu</option>
                 <option>1. dan</option>
                 <option>2. dan</option>
                 <option>3. dan</option>
-                <option>4. dan+</option>
+                <option>4. dan</option>
+                <option>5. dan</option>
+                <option>6. dan</option>
+                <option>7. dan</option>
+                <option>8. dan</option>
               </select>
             </div>
             <div class="field full">
@@ -127,14 +136,13 @@
               <label for="targetGradeJodo">Jodo target grade (if taking exam)</label>
               <select id="targetGradeJodo" name="targetGradeJodo" disabled>
                 <option value="">Select target grade</option>
-                <option>5. kyu</option>
-                <option>4. kyu</option>
-                <option>3. kyu</option>
                 <option>2. kyu</option>
                 <option>1. kyu</option>
                 <option>1. dan</option>
                 <option>2. dan</option>
                 <option>3. dan</option>
+                <option>4. dan</option>
+                <option>5. dan</option>
               </select>
             </div>
           </div>
@@ -148,7 +156,7 @@
             </div>
           </div>
 
-          <h2>Seminar package and options</h2>
+          <h2>Seminar package</h2>
           <div class="form-grid">
             <div class="field">
               <label for="campType">Participation type *</label>
@@ -158,39 +166,13 @@
                 <option value="both">Iaido + Jodo</option>
               </select>
             </div>
-
-            <div class="field">
-              <label for="mealPlan">Meals</label>
-              <select id="mealPlan" name="mealPlan">
-                <option value="none">No meal</option>
-                <option value="lunch">Lunch package</option>
-                <option value="full">Full meal package</option>
-              </select>
-            </div>
-
-            <div class="field">
-              <label for="accommodation">Accommodation</label>
-              <select id="accommodation" name="accommodation">
-                <option value="none">No accommodation</option>
-                <option value="dojo">Dojo accommodation</option>
-                <option value="guesthouse">Guesthouse</option>
-              </select>
-            </div>
-
-            <div class="field">
-              <label for="paymentCurrency">Payment currency *</label>
-              <select id="paymentCurrency" name="paymentCurrency" required>
-                <option value="EUR">EUR</option>
-                <option value="HUF">HUF</option>
-              </select>
-            </div>
           </div>
 
           <section class="price-summary" aria-live="polite">
             <h3>Amount due</h3>
             <ul id="price-lines" class="price-lines"></ul>
             <p class="price-total">Total: <strong id="price-total">€0.00</strong></p>
-            <p class="helper">The final amount is always calculated on the server in your selected currency and will be passed to Stripe Checkout.</p>
+            <p class="helper">The final amount is always calculated on the server in EUR and will be passed to Stripe Checkout.</p>
           </section>
 
           <h2>Billing details (private individual)</h2>

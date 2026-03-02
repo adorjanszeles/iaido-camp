@@ -7,9 +7,6 @@
   const wantsExamJodoEl = document.getElementById('wantsExamJodo');
   const targetGradeJodoEl = document.getElementById('targetGradeJodo');
   const campTypeEl = document.getElementById('campType');
-  const mealPlanEl = document.getElementById('mealPlan');
-  const accommodationEl = document.getElementById('accommodation');
-  const paymentCurrencyEl = document.getElementById('paymentCurrency');
   const priceLinesEl = document.getElementById('price-lines');
   const priceTotalEl = document.getElementById('price-total');
   const messageEl = document.getElementById('form-message');
@@ -17,35 +14,20 @@
 
   const fallbackPricing = {
     campType: {
-      iaido: { label: 'Iaido seminar', amounts: { EUR: 149, HUF: 59000 } },
-      jodo: { label: 'Jodo seminar', amounts: { EUR: 149, HUF: 59000 } },
-      both: { label: 'Iaido + Jodo seminar', amounts: { EUR: 249, HUF: 99000 } }
-    },
-    mealPlan: {
-      none: { label: 'No meal', amounts: { EUR: 0, HUF: 0 } },
-      lunch: { label: 'Lunch package', amounts: { EUR: 33, HUF: 13000 } },
-      full: { label: 'Full meal package', amounts: { EUR: 60, HUF: 24000 } }
-    },
-    accommodation: {
-      none: { label: 'No accommodation', amounts: { EUR: 0, HUF: 0 } },
-      dojo: { label: 'Dojo accommodation', amounts: { EUR: 73, HUF: 29000 } },
-      guesthouse: { label: 'Guesthouse', amounts: { EUR: 135, HUF: 54000 } }
+      iaido: { label: 'Iaido seminar', amount: 149 },
+      jodo: { label: 'Jodo seminar', amount: 149 },
+      both: { label: 'Iaido + Jodo seminar', amount: 249 }
     }
   };
 
   let pricingConfig = fallbackPricing;
-  let currencyConfig = {
-    enabled: ['EUR', 'HUF'],
-    default: 'EUR'
-  };
 
   function formatCurrency(value, currency = 'EUR') {
-    const decimals = currency === 'HUF' ? 0 : 2;
     return new Intl.NumberFormat('en-IE', {
       style: 'currency',
       currency,
-      minimumFractionDigits: decimals,
-      maximumFractionDigits: decimals
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
     }).format(Number(value || 0));
   }
 
@@ -67,68 +49,27 @@
     messageEl.textContent = text;
   }
 
-  function getEnabledCurrencies() {
-    return Array.isArray(currencyConfig.enabled) && currencyConfig.enabled.length > 0
-      ? currencyConfig.enabled
-      : ['EUR'];
-  }
-
-  function renderCurrencyOptions() {
-    if (!paymentCurrencyEl) return;
-
-    const enabled = getEnabledCurrencies();
-    const current = String(paymentCurrencyEl.value || '').toUpperCase();
-    paymentCurrencyEl.innerHTML = enabled
-      .map((code) => `<option value="${code}">${code}</option>`)
-      .join('');
-
-    const defaultCurrency = enabled.includes(String(currencyConfig.default || '').toUpperCase())
-      ? String(currencyConfig.default || '').toUpperCase()
-      : enabled[0];
-
-    paymentCurrencyEl.value = enabled.includes(current) ? current : defaultCurrency;
-  }
-
-  function getSelectedCurrency() {
-    const enabled = getEnabledCurrencies();
-    const selected = String(paymentCurrencyEl && paymentCurrencyEl.value ? paymentCurrencyEl.value : '').toUpperCase();
-    if (enabled.includes(selected)) return selected;
-    return enabled[0];
-  }
-
-  function getOption(groupName, code, fallbackCode, currency) {
+  function getOption(groupName, code, fallbackCode) {
     const group = pricingConfig[groupName] || {};
     const option = group[code] || group[fallbackCode] || null;
     if (!option) {
       return { label: code || fallbackCode || '-', amount: 0 };
     }
 
-    const amount = Number(option.amounts && option.amounts[currency] != null ? option.amounts[currency] : 0);
     return {
       label: option.label || code || fallbackCode || '-',
-      amount
+      amount: Number(option.amount || 0)
     };
   }
 
   function getPricingSelection() {
     const campType = String(campTypeEl.value || 'iaido');
-    const mealPlan = String(mealPlanEl.value || 'none');
-    const accommodation = String(accommodationEl.value || 'none');
-    const paymentCurrency = getSelectedCurrency();
-
-    const lineItems = [
-      { code: campType, ...getOption('campType', campType, 'iaido', paymentCurrency) },
-      { code: mealPlan, ...getOption('mealPlan', mealPlan, 'none', paymentCurrency) },
-      { code: accommodation, ...getOption('accommodation', accommodation, 'none', paymentCurrency) }
-    ];
+    const lineItems = [{ code: campType, ...getOption('campType', campType, 'iaido') }];
 
     const totalAmount = lineItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
     return {
       campType,
-      mealPlan,
-      accommodation,
-      paymentCurrency,
       lineItems,
       totalAmount
     };
@@ -138,10 +79,10 @@
     const pricing = getPricingSelection();
 
     priceLinesEl.innerHTML = pricing.lineItems
-      .map((item) => `<li><span>${item.label}</span><strong>${formatCurrency(item.amount, pricing.paymentCurrency)}</strong></li>`)
+      .map((item) => `<li><span>${item.label}</span><strong>${formatCurrency(item.amount, 'EUR')}</strong></li>`)
       .join('');
 
-    priceTotalEl.textContent = formatCurrency(pricing.totalAmount, pricing.paymentCurrency);
+    priceTotalEl.textContent = formatCurrency(pricing.totalAmount, 'EUR');
   }
 
   function formDataToPayload() {
@@ -155,9 +96,6 @@
       currentGradeIaido: raw.get('currentGradeIaido'),
       currentGradeJodo: raw.get('currentGradeJodo'),
       campType: raw.get('campType'),
-      mealPlan: raw.get('mealPlan'),
-      accommodation: raw.get('accommodation'),
-      paymentCurrency: getSelectedCurrency(),
       wantsExamIaido: Boolean(raw.get('wantsExamIaido')),
       targetGradeIaido: raw.get('targetGradeIaido'),
       wantsExamJodo: Boolean(raw.get('wantsExamJodo')),
@@ -184,27 +122,9 @@
       if (result && result.pricing) {
         pricingConfig = result.pricing;
       }
-
-      if (result && result.currencies) {
-        const enabledRaw = Array.isArray(result.currencies.enabled) ? result.currencies.enabled : ['EUR'];
-        const enabled = enabledRaw
-          .map((item) => String(item || '').trim().toUpperCase())
-          .filter((item, index, arr) => (item === 'EUR' || item === 'HUF') && arr.indexOf(item) === index);
-
-        const defaultCurrency = String(result.currencies.default || 'EUR').trim().toUpperCase();
-        currencyConfig = {
-          enabled: enabled.length > 0 ? enabled : ['EUR'],
-          default: enabled.includes(defaultCurrency) ? defaultCurrency : (enabled[0] || 'EUR')
-        };
-      }
     } catch {
       pricingConfig = fallbackPricing;
-      currencyConfig = {
-        enabled: ['EUR', 'HUF'],
-        default: 'EUR'
-      };
     } finally {
-      renderCurrencyOptions();
       renderPriceSummary();
     }
   }
@@ -237,11 +157,10 @@
       }
 
       const amount = Number(result.pricing?.total ?? result.pricing?.totalAmount ?? result.pricing?.totalHuf ?? 0);
-      const currency = String(result.pricing?.currency || payload.paymentCurrency || 'EUR').toUpperCase();
+      const currency = String(result.pricing?.currency || 'EUR').toUpperCase();
       const amountText = formatCurrency(amount, currency);
       form.reset();
       syncExamFields();
-      renderCurrencyOptions();
       renderPriceSummary();
       showMessage(
         'ok',
@@ -258,14 +177,8 @@
   wantsExamIaidoEl.addEventListener('change', syncExamFields);
   wantsExamJodoEl.addEventListener('change', syncExamFields);
   campTypeEl.addEventListener('change', renderPriceSummary);
-  mealPlanEl.addEventListener('change', renderPriceSummary);
-  accommodationEl.addEventListener('change', renderPriceSummary);
-  if (paymentCurrencyEl) {
-    paymentCurrencyEl.addEventListener('change', renderPriceSummary);
-  }
   form.addEventListener('submit', submitForm);
 
   syncExamFields();
-  renderCurrencyOptions();
   loadPricingConfig();
 })();

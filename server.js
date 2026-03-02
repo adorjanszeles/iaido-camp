@@ -41,22 +41,21 @@ const ADMIN_NOTIFY_EMAIL = String(process.env.ADMIN_NOTIFY_EMAIL || '').trim();
 const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
 const EMAIL_REQUEST_TIMEOUT_MS = 8000;
 const APP_SETTING_KEY_PRICING = 'pricing_settings_v1';
-const AVAILABLE_CURRENCIES = ['EUR', 'HUF'];
 const PRICE_CATALOG = {
   campType: {
-    iaido: { label: 'Iaido seminar', defaultAmounts: { EUR: 149, HUF: 59000 } },
-    jodo: { label: 'Jodo seminar', defaultAmounts: { EUR: 149, HUF: 59000 } },
-    both: { label: 'Iaido + Jodo seminar', defaultAmounts: { EUR: 249, HUF: 99000 } }
+    iaido: { label: 'Iaido seminar', defaultAmount: 149 },
+    jodo: { label: 'Jodo seminar', defaultAmount: 149 },
+    both: { label: 'Iaido + Jodo seminar', defaultAmount: 249 }
   },
   mealPlan: {
-    none: { label: 'No meal', defaultAmounts: { EUR: 0, HUF: 0 } },
-    lunch: { label: 'Lunch package', defaultAmounts: { EUR: 33, HUF: 13000 } },
-    full: { label: 'Full meal package', defaultAmounts: { EUR: 60, HUF: 24000 } }
+    none: { label: 'No meal', defaultAmount: 0 },
+    lunch: { label: 'Lunch package', defaultAmount: 33 },
+    full: { label: 'Full meal package', defaultAmount: 60 }
   },
   accommodation: {
-    none: { label: 'No accommodation', defaultAmounts: { EUR: 0, HUF: 0 } },
-    dojo: { label: 'Dojo accommodation', defaultAmounts: { EUR: 73, HUF: 29000 } },
-    guesthouse: { label: 'Guesthouse', defaultAmounts: { EUR: 135, HUF: 54000 } }
+    none: { label: 'No accommodation', defaultAmount: 0 },
+    dojo: { label: 'Dojo accommodation', defaultAmount: 73 },
+    guesthouse: { label: 'Guesthouse', defaultAmount: 135 }
   }
 };
 
@@ -69,49 +68,21 @@ function buildDefaultPricingSettings() {
   for (const [groupName, options] of Object.entries(PRICE_CATALOG)) {
     prices[groupName] = {};
     for (const [optionCode, option] of Object.entries(options)) {
-      prices[groupName][optionCode] = {
-        EUR: Number(option.defaultAmounts.EUR),
-        HUF: Number(option.defaultAmounts.HUF)
-      };
+      prices[groupName][optionCode] = Number(option.defaultAmount);
     }
   }
 
-  return {
-    prices,
-    currencies: {
-      enabled: [...AVAILABLE_CURRENCIES],
-      default: 'EUR'
-    }
-  };
+  return { prices };
 }
 
 const DEFAULT_PRICING_SETTINGS = buildDefaultPricingSettings();
 
-function normalizeMoneyAmount(value, currency) {
+function normalizeMoneyAmount(value) {
   const num = Number(value);
   if (!Number.isFinite(num) || num < 0) {
-    throw new Error(`Invalid amount for ${currency}.`);
+    throw new Error('Invalid amount for EUR.');
   }
-
-  if (currency === 'HUF') {
-    return Math.round(num);
-  }
-
   return Math.round(num * 100) / 100;
-}
-
-function normalizeCurrencyList(values) {
-  const list = Array.isArray(values) ? values : [];
-  const normalized = [];
-
-  for (const raw of list) {
-    const code = String(raw || '').trim().toUpperCase();
-    if (!AVAILABLE_CURRENCIES.includes(code)) continue;
-    if (normalized.includes(code)) continue;
-    normalized.push(code);
-  }
-
-  return normalized;
 }
 
 function normalizePricingSettings(rawSettings, fallbackSettings = DEFAULT_PRICING_SETTINGS) {
@@ -119,38 +90,19 @@ function normalizePricingSettings(rawSettings, fallbackSettings = DEFAULT_PRICIN
   const raw = rawSettings && typeof rawSettings === 'object' ? rawSettings : {};
 
   const normalized = {
-    prices: {},
-    currencies: {
-      enabled: [...fallback.currencies.enabled],
-      default: fallback.currencies.default
-    }
+    prices: {}
   };
 
   for (const [groupName, options] of Object.entries(PRICE_CATALOG)) {
     normalized.prices[groupName] = {};
     const rawGroup = raw.prices && typeof raw.prices[groupName] === 'object' ? raw.prices[groupName] : {};
     for (const optionCode of Object.keys(options)) {
-      const rawOption = rawGroup[optionCode] && typeof rawGroup[optionCode] === 'object' ? rawGroup[optionCode] : {};
+      const rawOption = rawGroup[optionCode];
       const fallbackOption = fallback.prices[groupName][optionCode];
-      normalized.prices[groupName][optionCode] = {
-        EUR: normalizeMoneyAmount(rawOption.EUR ?? fallbackOption.EUR, 'EUR'),
-        HUF: normalizeMoneyAmount(rawOption.HUF ?? fallbackOption.HUF, 'HUF')
-      };
+      const fromLegacyObject = rawOption && typeof rawOption === 'object' ? rawOption.EUR : undefined;
+      normalized.prices[groupName][optionCode] = normalizeMoneyAmount(rawOption ?? fromLegacyObject ?? fallbackOption);
     }
   }
-
-  const enabled = normalizeCurrencyList(raw.currencies?.enabled ?? fallback.currencies.enabled);
-  if (enabled.length === 0) {
-    throw new Error('At least one payment currency must be enabled.');
-  }
-
-  const requestedDefault = String((raw.currencies?.default ?? fallback.currencies.default) || '')
-    .trim()
-    .toUpperCase();
-  const defaultCurrency = enabled.includes(requestedDefault) ? requestedDefault : enabled[0];
-
-  normalized.currencies.enabled = enabled;
-  normalized.currencies.default = defaultCurrency;
   return normalized;
 }
 
@@ -162,10 +114,7 @@ function buildPublicPricingConfig(pricingSettings) {
       const amounts = pricingSettings.prices[groupName][optionCode];
       config[groupName][optionCode] = {
         label: option.label,
-        amounts: {
-          EUR: amounts.EUR,
-          HUF: amounts.HUF
-        }
+        amount: Number(amounts)
       };
     }
   }
@@ -228,18 +177,6 @@ function savePricingSettings(db, nextSettings) {
   return normalized;
 }
 
-function getEnabledCurrencyMap(pricingSettings) {
-  return pricingSettings.currencies.enabled.reduce((acc, code) => {
-    acc[code] = true;
-    return acc;
-  }, {});
-}
-
-function resolvePaymentCurrency(value, pricingSettings) {
-  const allowed = getEnabledCurrencyMap(pricingSettings);
-  return toEnumValue(value, allowed, pricingSettings.currencies.default);
-}
-
 function toEnumValue(value, allowedValues, fallbackValue) {
   const normalized = String(value || '').trim();
   return Object.prototype.hasOwnProperty.call(allowedValues, normalized) ? normalized : fallbackValue;
@@ -249,33 +186,21 @@ function calculatePricing(selection, pricingSettings = DEFAULT_PRICING_SETTINGS)
   const campType = toEnumValue(selection.campType, pricingSettings.prices.campType, 'iaido');
   const mealPlan = toEnumValue(selection.mealPlan, pricingSettings.prices.mealPlan, 'none');
   const accommodation = toEnumValue(selection.accommodation, pricingSettings.prices.accommodation, 'none');
-  const currency = resolvePaymentCurrency(selection.paymentCurrency, pricingSettings);
+  const currency = 'EUR';
 
   const lineItems = [
     {
       key: 'campType',
       code: campType,
       label: PRICE_CATALOG.campType[campType].label,
-      amount: pricingSettings.prices.campType[campType][currency]
-    },
-    {
-      key: 'mealPlan',
-      code: mealPlan,
-      label: PRICE_CATALOG.mealPlan[mealPlan].label,
-      amount: pricingSettings.prices.mealPlan[mealPlan][currency]
-    },
-    {
-      key: 'accommodation',
-      code: accommodation,
-      label: PRICE_CATALOG.accommodation[accommodation].label,
-      amount: pricingSettings.prices.accommodation[accommodation][currency]
+      amount: pricingSettings.prices.campType[campType]
     }
   ];
 
   const totalAmount = lineItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
   return {
-    selection: { campType, mealPlan, accommodation, paymentCurrency: currency },
+    selection: { campType, mealPlan, accommodation },
     lineItems: lineItems.map((item) => ({ ...item, amountHuf: item.amount })),
     total: totalAmount,
     totalAmount,
@@ -285,12 +210,11 @@ function calculatePricing(selection, pricingSettings = DEFAULT_PRICING_SETTINGS)
 }
 
 function formatCurrency(value, currency = 'EUR') {
-  const fractionDigits = currency === 'HUF' ? 0 : 2;
   return new Intl.NumberFormat('en-IE', {
     style: 'currency',
     currency,
-    minimumFractionDigits: fractionDigits,
-    maximumFractionDigits: fractionDigits
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
   }).format(Number(value || 0));
 }
 
@@ -638,8 +562,7 @@ function migrateLegacyJsonIfNeeded(db) {
       const pricing = calculatePricing({
         campType: item.campType || 'iaido',
         mealPlan: item.mealPlan || 'none',
-        accommodation: item.accommodation || 'none',
-        paymentCurrency: String(item.currency || 'EUR').toUpperCase()
+        accommodation: item.accommodation || 'none'
       });
       const wantsExamIaido = Boolean(item.wantsExamIaido ?? item.wantsExam);
       const wantsExamJodo = Boolean(item.wantsExamJodo);
@@ -656,7 +579,7 @@ function migrateLegacyJsonIfNeeded(db) {
         item.createdAt || new Date().toISOString(),
         item.status || 'PENDING_PAYMENT',
         Number(item.amount ?? item.amountHuf ?? pricing.totalAmount ?? pricing.totalHuf),
-        item.currency || pricing.currency,
+        'EUR',
         String(item.fullName || ''),
         String(item.email || ''),
         String(item.phone || ''),
@@ -920,6 +843,28 @@ function isValidPhone(value) {
   return typeof value === 'string' && /^[+()\-\s0-9]{7,20}$/.test(value.trim());
 }
 
+function isValidDateOfBirth(value) {
+  if (!value) return true;
+  if (typeof value !== 'string') return false;
+
+  const match = value.trim().match(/^(\d{4})\.(\d{2})\.(\d{2})$/);
+  if (!match) return false;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  return (
+    Number.isInteger(year) &&
+    year >= 1900 &&
+    year <= 2100 &&
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
 function sanitizePayload(payload, pricingSettings = DEFAULT_PRICING_SETTINGS) {
   const fallbackTargetGradeIaido = payload.targetGradeIaido ?? payload.targetGrade ?? '';
   const fallbackCurrentGradeIaido = payload.currentGradeIaido ?? payload.currentGrade ?? '';
@@ -928,7 +873,6 @@ function sanitizePayload(payload, pricingSettings = DEFAULT_PRICING_SETTINGS) {
   const campType = toEnumValue(payload.campType, pricingSettings.prices.campType, 'iaido');
   const mealPlan = toEnumValue(payload.mealPlan, pricingSettings.prices.mealPlan, 'none');
   const accommodation = toEnumValue(payload.accommodation, pricingSettings.prices.accommodation, 'none');
-  const paymentCurrency = resolvePaymentCurrency(payload.paymentCurrency, pricingSettings);
 
   return {
     fullName: String(payload.fullName || '').trim(),
@@ -941,7 +885,6 @@ function sanitizePayload(payload, pricingSettings = DEFAULT_PRICING_SETTINGS) {
     campType,
     mealPlan,
     accommodation,
-    paymentCurrency,
     wantsExamIaido,
     targetGradeIaido: wantsExamIaido ? String(fallbackTargetGradeIaido).trim() : '',
     wantsExamJodo,
@@ -963,6 +906,7 @@ function validateRegistration(data, pricingSettings = DEFAULT_PRICING_SETTINGS) 
   if (!isNonEmptyString(data.fullName)) errors.push('Full name is required.');
   if (!isValidEmail(data.email)) errors.push('A valid email address is required.');
   if (!isValidPhone(data.phone)) errors.push('A valid phone number is required.');
+  if (!isValidDateOfBirth(data.dateOfBirth)) errors.push('Date of birth must use yyyy.mm.dd format (for example: 1998.04.27).');
   if (!isNonEmptyString(data.city)) errors.push('City is required.');
 
   const needsIaidoGrade = data.campType === 'iaido' || data.campType === 'both' || data.wantsExamIaido;
@@ -981,9 +925,6 @@ function validateRegistration(data, pricingSettings = DEFAULT_PRICING_SETTINGS) 
   }
   if (!Object.prototype.hasOwnProperty.call(pricingSettings.prices.accommodation, data.accommodation)) {
     errors.push('Invalid accommodation option.');
-  }
-  if (!pricingSettings.currencies.enabled.includes(data.paymentCurrency)) {
-    errors.push('Invalid payment currency.');
   }
 
   if (data.wantsExamIaido && !isNonEmptyString(data.targetGradeIaido)) {
@@ -1246,12 +1187,9 @@ function getStats(registrations) {
   const wantsExamTotal = activeRegistrations.filter((r) => r.wantsExamIaido || r.wantsExamJodo).length;
   const pendingPayment = activeRegistrations.filter((r) => r.status === 'PENDING_PAYMENT').length;
   const paid = activeRegistrations.filter((r) => r.status === 'PAID').length;
-  const projectedRevenueByCurrency = activeRegistrations.reduce((acc, current) => {
-    const code = String(current.currency || 'EUR').toUpperCase();
-    const amount = Number(current.amount ?? current.amountHuf ?? 0);
-    acc[code] = (acc[code] || 0) + amount;
-    return acc;
-  }, {});
+  const projectedRevenueEur = activeRegistrations
+    .filter((r) => !r.currency || String(r.currency).toUpperCase() === 'EUR')
+    .reduce((sum, current) => sum + Number(current.amount ?? current.amountHuf ?? 0), 0);
 
   const byCampType = activeRegistrations.reduce((acc, current) => {
     acc[current.campType] = (acc[current.campType] || 0) + 1;
@@ -1299,9 +1237,9 @@ function getStats(registrations) {
     wantsExamTotal,
     pendingPayment,
     paid,
-    projectedRevenueByCurrency,
-    projectedRevenueHuf: projectedRevenueByCurrency.HUF || 0,
-    projectedRevenueEur: projectedRevenueByCurrency.EUR || 0,
+    projectedRevenueByCurrency: { EUR: projectedRevenueEur },
+    projectedRevenueHuf: 0,
+    projectedRevenueEur,
     byCampType,
     iaidoApplicants,
     jodoApplicants,
@@ -1350,7 +1288,7 @@ function createServer(options = {}) {
     if (req.method === 'GET' && pathname === '/api/pricing') {
       sendJson(res, 200, {
         pricing: buildPublicPricingConfig(pricingSettings),
-        currencies: pricingSettings.currencies
+        currency: 'EUR'
       });
       return;
     }
@@ -1374,8 +1312,7 @@ function createServer(options = {}) {
 
       sendJson(res, 200, {
         settings: pricingSettings,
-        pricing: buildPublicPricingConfig(pricingSettings),
-        currencies: pricingSettings.currencies
+        pricing: buildPublicPricingConfig(pricingSettings)
       });
       return;
     }
@@ -1400,8 +1337,7 @@ function createServer(options = {}) {
         sendJson(res, 200, {
           message: 'Pricing settings saved.',
           settings: pricingSettings,
-          pricing: buildPublicPricingConfig(pricingSettings),
-          currencies: pricingSettings.currencies
+          pricing: buildPublicPricingConfig(pricingSettings)
         });
       } catch (error) {
         if (isSqliteBusyError(error)) {
@@ -1556,8 +1492,7 @@ function createServer(options = {}) {
         const pricing = calculatePricing({
           campType: cleanBody.campType,
           mealPlan: cleanBody.mealPlan,
-          accommodation: cleanBody.accommodation,
-          paymentCurrency: cleanBody.paymentCurrency
+          accommodation: cleanBody.accommodation
         }, pricingSettings);
 
         const newRegistration = {
@@ -1566,7 +1501,7 @@ function createServer(options = {}) {
           status: 'PENDING_PAYMENT',
           amount: pricing.totalAmount,
           amountHuf: pricing.totalAmount,
-          currency: pricing.currency,
+          currency: 'EUR',
           priceBreakdown: pricing,
           privacyPolicyVersion: PRIVACY_POLICY_VERSION,
           termsVersion: TERMS_VERSION,
