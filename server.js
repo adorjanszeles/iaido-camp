@@ -843,6 +843,14 @@ function isValidPhone(value) {
   return typeof value === 'string' && /^[+()\-\s0-9]{7,20}$/.test(value.trim());
 }
 
+function isValidPostalCode(value) {
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim();
+  if (normalized.length < 2 || normalized.length > 16) return false;
+  if (!/^[A-Za-z0-9][A-Za-z0-9\s-]*$/.test(normalized)) return false;
+  return /[A-Za-z0-9]/.test(normalized);
+}
+
 function isValidDateOfBirth(value) {
   if (!value) return true;
   if (typeof value !== 'string') return false;
@@ -990,7 +998,7 @@ function validateRegistration(data, pricingSettings = DEFAULT_PRICING_SETTINGS) 
   }
 
   if (!isNonEmptyString(data.billingFullName)) errors.push('Billing full name is required.');
-  if (!/^\d{4}$/.test(data.billingZip)) errors.push('Billing ZIP code must be 4 digits.');
+  if (!isValidPostalCode(data.billingZip)) errors.push('Billing postal code format is invalid.');
   if (!isNonEmptyString(data.billingCity)) errors.push('Billing city is required.');
   if (!isNonEmptyString(data.billingAddress)) errors.push('Billing address is required.');
   if (!isNonEmptyString(data.billingCountry)) errors.push('Billing country is required.');
