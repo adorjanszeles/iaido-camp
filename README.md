@@ -1,6 +1,6 @@
-# Iaido Nyári Tábor - Demo Implementáció
+# Iaido Nyári Tábor - Webalkalmazás
 
-Ez a projekt egy ideiglenes tábori weboldal demó:
+Ez a projekt egy nyári tábori weboldal:
 - welcome oldal (`/`)
 - program oldal (`/program`)
 - FAQ oldal (`/faq`)
@@ -8,7 +8,7 @@ Ez a projekt egy ideiglenes tábori weboldal demó:
 - adatkezelési tájékoztató (`/privacy`)
 - részvételi feltételek (`/terms`)
 - jelentkezési oldal (`/registration`)
-- admin demo oldal (`/admin`)
+- admin oldal (`/admin`)
 
 ## Mi működik most
 - Regisztrációs űrlap a kért mezőkkel
@@ -23,6 +23,8 @@ Ez a projekt egy ideiglenes tábori weboldal demó:
 - Admin felület bejelentkezéssel védve (`/admin`)
 - Admin statok Iaido/Jodo bontással
 - Admin árbeállítások (EUR árak)
+- Admin email-küldés template vagy egyéni tartalommal
+- Admin email-küldés címzett csoportokra: kiválasztott / összes aktív / csak fizetett / csak függő fizetés
 - Jelentkezői opciók részletes megjelenítése az admin táblában
 - Jelentkezés státusz alapú törlése (`DELETED`, sor megtartásával)
 - GDPR anonimizálás adminból (`ANONYMIZED`, személyes adatok tisztítása)
@@ -32,13 +34,15 @@ Ez a projekt egy ideiglenes tábori weboldal demó:
 - Stripe Checkout session létrehozás regisztráció után
 - Stripe webhook alapú státuszfrissítés (`PAID`)
 - Adminból egyedi újrafizetési link generálás és másolás
+- Automatikus SQLite backup minden nap éjfélkor (`data/backups`)
+- Kézi SQLite backup indítás adminból
 
 ## Adattárolás
 - Aktív adattár: `data/camp.db` (SQLite)
 - Egyszeri automatikus migráció: ha létezik `data/registrations.json` és a DB még üres, a rendszer áthozza az adatokat SQLite-ba.
 
 ## Mi nincs még bekötve
-- Számlázz.hu számlakiállítás
+- NAV Online Számla számlakiállítás
 - Google Sheets adattárolás
 
 ## Email (Brevo) integráció
@@ -49,11 +53,14 @@ Ez a projekt egy ideiglenes tábori weboldal demó:
 Szükséges env változók:
 
 ```bash
+ADMIN_PASSWORD=...
+ADMIN_SESSION_SECRET=...
 EMAIL_PROVIDER=brevo
 BREVO_API_KEY=...
 EMAIL_FROM=no-reply@your-domain.com
 EMAIL_FROM_NAME=Ishido Sensei - Summer Seminar
 ADMIN_NOTIFY_EMAIL=you@example.com
+ADMIN_EMAIL_MAX_RECIPIENTS=500
 APP_BASE_URL=https://your-domain.com
 STRIPE_SECRET_KEY=sk_live_or_test_...
 STRIPE_WEBHOOK_SECRET=whsec_...
@@ -61,15 +68,25 @@ STRIPE_WEBHOOK_SECRET=whsec_...
 STRIPE_SUCCESS_URL=https://your-domain.com/registration?payment=success
 STRIPE_CANCEL_URL=https://your-domain.com/registration?payment=cancel
 RETRY_PAYMENT_LINK_TTL_SECONDS=604800
+DB_BACKUP_ENABLED=true
+DB_BACKUP_DIR=./data/backups
+DB_BACKUP_RETENTION_DAYS=30
 ```
 
 A fenti integrációkhoz elérhető API végpontok:
 - `GET /api/pricing`
+- `GET /api/admin/session`
+- `POST /api/admin/login`
+- `POST /api/admin/logout`
+- `POST /api/admin/password`
+- `GET /api/admin/email/templates`
+- `POST /api/admin/email/send`
 - `GET /api/admin/pricing`
 - `POST /api/admin/pricing`
 - `POST /api/admin/registrations/mark-deleted`
 - `POST /api/admin/registrations/anonymize`
 - `POST /api/admin/registrations/retry-link`
+- `POST /api/admin/backup`
 - `GET /api/admin/export.csv`
 - `POST /api/payments/create-checkout-session`
 - `POST /api/invoices/create`
@@ -94,15 +111,36 @@ Ezután nyisd meg:
 Az admin oldal nincs linkelve a publikus menüből, csak közvetlen URL-en érhető el.
 
 ## Admin bejelentkezés
-- Alapértelmezett felhasználónév: `admin`
-- Alapértelmezett jelszó: `demo-admin-123`
-- Éles környezetben kötelező átállítani env változókkal:
+- Az admin belépés jelszó alapú.
+- Kezdeti (bootstrap) jelszó: `ADMIN_PASSWORD` env (ha nincs megadva: `admin123`).
+- A jelszó hash-elve kerül mentésre SQLite-ba (`app_settings`), és admin felületről módosítható.
+- Login védelem: 5 sikertelen próbálkozás után 15 perces IP alapú átmeneti tiltás.
+- Jelszócsere után új session cookie keletkezik, régi sessionök érvénytelenednek.
+- Éles környezetben kötelező erős jelszót és új session secretet használni:
 
 ```bash
-ADMIN_USERNAME=...
 ADMIN_PASSWORD=...
 ADMIN_SESSION_SECRET=egy-hosszu-veletlen-titok
 ```
+
+Részletes leírás: [ADMIN_SECURITY.md](./ADMIN_SECURITY.md)
+
+### Admin jelszócsere menete
+1. Jelentkezz be a `/admin` oldalon.
+2. Nyisd le a `Security` panelt.
+3. Add meg a jelenlegi jelszót, majd az új jelszót kétszer.
+4. Kattints az `Update admin password` gombra.
+
+Jelszószabály:
+- minimum 8 karakter
+- legyen benne legalább 1 betű
+- legyen benne legalább 1 szám
+
+### Üzemeltetési javaslat éles környezethez
+1. Állíts be erős, egyedi `ADMIN_PASSWORD` értéket az indulás előtt.
+2. Állíts be hosszú, random `ADMIN_SESSION_SECRET` értéket.
+3. Használj HTTPS-t (production alatt Secure cookie aktív).
+4. Tartsd bekapcsolva az automatikus backupot.
 
 ## Környezeti igény
 - Node.js 22+ (a `node:sqlite` modul miatt)

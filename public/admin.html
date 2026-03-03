@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Admin Demo | Ishido Sensei - Summer Seminar 2026</title>
+    <title>Admin | Ishido Sensei - Summer Seminar 2026</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -24,7 +24,9 @@
               <p class="subtitle">Quick overview: registration counts and list of submitted records.</p>
               <div class="cta-row">
                 <button class="btn secondary" id="export-csv-btn" type="button">Export CSV</button>
+                <button class="btn secondary" id="create-backup-btn" type="button">Create backup now</button>
               </div>
+              <div id="backup-message" aria-live="polite"></div>
               <div id="stats" class="grid-2"></div>
             </div>
           </details>
@@ -68,6 +70,108 @@
           </details>
 
           <details class="card faq-item admin-accordion-item">
+            <summary>Security</summary>
+            <div class="accordion-content">
+              <p class="subtitle">Change the admin password used for sign-in.</p>
+              <form id="admin-password-form" novalidate>
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="current-password">Current password</label>
+                    <input id="current-password" name="currentPassword" type="password" autocomplete="current-password" required />
+                  </div>
+                  <div class="field">
+                    <label for="new-password">New password</label>
+                    <input id="new-password" name="newPassword" type="password" autocomplete="new-password" required />
+                  </div>
+                  <div class="field">
+                    <label for="confirm-password">Confirm new password</label>
+                    <input id="confirm-password" name="confirmPassword" type="password" autocomplete="new-password" required />
+                  </div>
+                </div>
+                <p class="helper">Minimum 8 characters, with at least one letter and one number.</p>
+                <div class="cta-row">
+                  <button class="btn primary" id="save-password-btn" type="submit">Update admin password</button>
+                </div>
+                <div id="password-message" aria-live="polite"></div>
+              </form>
+            </div>
+          </details>
+
+          <details class="card faq-item admin-accordion-item">
+            <summary>Email sender</summary>
+            <div class="accordion-content">
+              <p class="subtitle">Send templated or custom emails to selected registrants or recipient groups.</p>
+
+              <form id="email-send-form" novalidate>
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="email-recipient-mode">Recipient mode</label>
+                    <select id="email-recipient-mode" name="recipientMode">
+                      <option value="selected">Selected recipients</option>
+                      <option value="all_active">All active recipients</option>
+                      <option value="paid">Only paid recipients</option>
+                      <option value="pending_payment">Only pending payment recipients</option>
+                    </select>
+                  </div>
+
+                  <div class="field">
+                    <label for="email-template">Email template</label>
+                    <select id="email-template" name="templateKey">
+                      <option value="custom">Custom email</option>
+                    </select>
+                  </div>
+
+                  <div class="field">
+                    <label for="email-recipient-search">Filter recipients by name or email</label>
+                    <input id="email-recipient-search" type="search" placeholder="Type a name or email..." autocomplete="off" />
+                    <p id="email-recipient-meta" class="helper">Showing 0 recipients. Selected: 0.</p>
+                  </div>
+                </div>
+
+                <div class="cta-row">
+                  <button class="btn secondary" id="email-select-visible-btn" type="button">Select visible</button>
+                  <button class="btn secondary" id="email-clear-selection-btn" type="button">Clear selection</button>
+                  <button class="btn secondary" id="email-select-all-btn" type="button">Select all active</button>
+                </div>
+
+                <div class="table-wrap" style="max-height: 260px; overflow: auto; margin-top: 0.6rem;">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th style="width: 48px;">Pick</th>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody id="email-recipient-rows"></tbody>
+                  </table>
+                </div>
+
+                <div class="form-grid" style="margin-top: 0.8rem;">
+                  <div class="field">
+                    <label for="email-subject">Subject</label>
+                    <input id="email-subject" name="subject" maxlength="180" required />
+                  </div>
+
+                  <div class="field full">
+                    <label for="email-body">Email body</label>
+                    <textarea id="email-body" name="body" rows="10" maxlength="20000" required></textarea>
+                    <p class="helper">
+                      Supported placeholders: {{fullName}}, {{firstName}}, {{email}}, {{registrationId}}, {{campType}}, {{status}}, {{amount}}, {{currency}}
+                    </p>
+                  </div>
+                </div>
+
+                <div class="cta-row">
+                  <button class="btn primary" id="send-email-btn" type="submit">Send email</button>
+                </div>
+                <div id="email-send-message" aria-live="polite"></div>
+              </form>
+            </div>
+          </details>
+
+          <details class="card faq-item admin-accordion-item">
             <summary>Registrations</summary>
             <div class="accordion-content">
               <div class="form-grid" style="margin: 0 0 0.8rem;">
@@ -99,7 +203,7 @@
       </main>
 
       <footer>
-        <div class="container">Admin interface. Access is restricted to signed-in users.</div>
+        <div class="container">Admin interface. Access is restricted to signed-in users. HiraBu Dojo, Budapest, 2026</div>
       </footer>
     </div>
 

@@ -3,11 +3,35 @@
   const rowsEl = document.getElementById('rows');
   const logoutBtn = document.getElementById('logout-btn');
   const exportCsvBtn = document.getElementById('export-csv-btn');
+  const createBackupBtn = document.getElementById('create-backup-btn');
+  const backupMessageEl = document.getElementById('backup-message');
   const pricingFormEl = document.getElementById('pricing-form');
   const pricingMessageEl = document.getElementById('pricing-message');
+  const passwordFormEl = document.getElementById('admin-password-form');
+  const passwordMessageEl = document.getElementById('password-message');
+  const savePasswordBtn = document.getElementById('save-password-btn');
+  const emailSendFormEl = document.getElementById('email-send-form');
+  const emailRecipientModeEl = document.getElementById('email-recipient-mode');
+  const emailTemplateEl = document.getElementById('email-template');
+  const emailRecipientSearchEl = document.getElementById('email-recipient-search');
+  const emailRecipientMetaEl = document.getElementById('email-recipient-meta');
+  const emailRecipientRowsEl = document.getElementById('email-recipient-rows');
+  const emailSelectVisibleBtn = document.getElementById('email-select-visible-btn');
+  const emailClearSelectionBtn = document.getElementById('email-clear-selection-btn');
+  const emailSelectAllBtn = document.getElementById('email-select-all-btn');
+  const emailSubjectEl = document.getElementById('email-subject');
+  const emailBodyEl = document.getElementById('email-body');
+  const emailSendMessageEl = document.getElementById('email-send-message');
+  const sendEmailBtn = document.getElementById('send-email-btn');
   const registrationSearchEl = document.getElementById('registration-search');
   const registrationSearchMetaEl = document.getElementById('registration-search-meta');
   let allRegistrations = [];
+  let emailTemplates = [];
+  let emailCapabilities = {
+    provider: 'disabled',
+    maxRecipients: 0
+  };
+  const selectedEmailRecipientIds = new Set();
 
   const labels = {
     campType: {
@@ -220,6 +244,135 @@
     pricingMessageEl.textContent = text;
   }
 
+  function showBackupMessage(type, text) {
+    if (!backupMessageEl) return;
+    backupMessageEl.className = `notice ${type}`;
+    backupMessageEl.textContent = text;
+  }
+
+  function showPasswordMessage(type, text) {
+    if (!passwordMessageEl) return;
+    passwordMessageEl.className = `notice ${type}`;
+    passwordMessageEl.textContent = text;
+  }
+
+  function showEmailMessage(type, text) {
+    if (!emailSendMessageEl) return;
+    emailSendMessageEl.className = `notice ${type}`;
+    emailSendMessageEl.textContent = text;
+  }
+
+  function getEmailRecipientMode() {
+    return String(emailRecipientModeEl?.value || 'selected').trim() || 'selected';
+  }
+
+  function getEmailEligibleRecipients() {
+    return allRegistrations.filter((item) => {
+      const status = String(item.status || '');
+      const email = String(item.email || '').trim();
+      return status !== 'DELETED' && status !== 'ANONYMIZED' && email.length > 0;
+    });
+  }
+
+  function getFilteredEmailRecipients() {
+    const query = String(emailRecipientSearchEl?.value || '').trim().toLowerCase();
+    const recipients = getEmailEligibleRecipients();
+    if (!query) return recipients;
+
+    return recipients.filter((item) => {
+      const fullName = String(item.fullName || '').toLowerCase();
+      const email = String(item.email || '').toLowerCase();
+      return fullName.includes(query) || email.includes(query);
+    });
+  }
+
+  function updateEmailRecipientMeta(visibleCount, totalCount) {
+    if (!emailRecipientMetaEl) return;
+    const selectedCount = selectedEmailRecipientIds.size;
+    emailRecipientMetaEl.textContent = `Showing ${visibleCount} of ${totalCount} recipients. Selected: ${selectedCount}.`;
+  }
+
+  function renderEmailRecipientRows() {
+    if (!emailRecipientRowsEl) return;
+
+    const eligible = getEmailEligibleRecipients();
+    const filtered = getFilteredEmailRecipients();
+    const mode = getEmailRecipientMode();
+    const selectionEnabled = mode === 'selected';
+
+    if (!filtered.length) {
+      emailRecipientRowsEl.innerHTML = '<tr><td colspan="4">No matching recipients.</td></tr>';
+      updateEmailRecipientMeta(0, eligible.length);
+      return;
+    }
+
+    emailRecipientRowsEl.innerHTML = filtered
+      .slice()
+      .reverse()
+      .map((item) => {
+        const id = String(item.id || '');
+        const checked = selectedEmailRecipientIds.has(id) ? 'checked' : '';
+        const disabled = selectionEnabled ? '' : 'disabled';
+        return `
+          <tr>
+            <td><input class="js-email-recipient-check" type="checkbox" data-registration-id="${id}" ${checked} ${disabled} /></td>
+            <td>${escapeHtml(item.fullName || '-')}</td>
+            <td>${escapeHtml(item.email || '-')}</td>
+            <td>${escapeHtml(item.status || '-')}</td>
+          </tr>
+        `;
+      })
+      .join('');
+
+    updateEmailRecipientMeta(filtered.length, eligible.length);
+  }
+
+  function setEmailSelectionControlsState() {
+    const selectionEnabled = getEmailRecipientMode() === 'selected';
+    if (emailRecipientSearchEl) emailRecipientSearchEl.disabled = !selectionEnabled;
+    if (emailSelectVisibleBtn) emailSelectVisibleBtn.disabled = !selectionEnabled;
+    if (emailClearSelectionBtn) emailClearSelectionBtn.disabled = !selectionEnabled;
+    if (emailSelectAllBtn) emailSelectAllBtn.disabled = !selectionEnabled;
+
+    if (emailCapabilities.provider !== 'brevo') {
+      showEmailMessage('error', 'Email provider is not configured. Set Brevo env values first.');
+      return;
+    }
+
+    if (!selectionEnabled) {
+      showEmailMessage('ok', 'Recipient group mode is active. Manual selection is disabled.');
+    } else {
+      showEmailMessage('ok', 'Choose recipients, select a template or custom content, then send.');
+    }
+  }
+
+  function populateEmailTemplates(templates) {
+    if (!emailTemplateEl) return;
+    const normalizedTemplates = Array.isArray(templates) ? templates : [];
+    const previous = String(emailTemplateEl.value || 'custom');
+
+    emailTemplateEl.innerHTML = '<option value="custom">Custom email</option>';
+    normalizedTemplates.forEach((template) => {
+      const key = String(template?.key || '').trim();
+      if (!key) return;
+      const label = String(template?.label || key);
+      emailTemplateEl.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(key)}">${escapeHtml(label)}</option>`);
+    });
+
+    emailTemplateEl.value = normalizedTemplates.some((template) => template.key === previous) ? previous : 'custom';
+  }
+
+  function applySelectedTemplateDefaults() {
+    if (!emailTemplateEl) return;
+    const templateKey = String(emailTemplateEl.value || 'custom').trim();
+    if (templateKey === 'custom') return;
+
+    const selectedTemplate = emailTemplates.find((item) => item.key === templateKey);
+    if (!selectedTemplate) return;
+    if (emailSubjectEl) emailSubjectEl.value = String(selectedTemplate.subject || '');
+    if (emailBodyEl) emailBodyEl.value = String(selectedTemplate.body || '');
+  }
+
   function populatePricingForm(settings) {
     if (!pricingFormEl || !settings || typeof settings !== 'object') return;
 
@@ -293,13 +446,14 @@
 
   async function loadData() {
     try {
-      const [statsRes, regsRes, pricingRes] = await Promise.all([
+      const [statsRes, regsRes, pricingRes, emailTemplateRes] = await Promise.all([
         fetch('/api/stats'),
         fetch('/api/registrations'),
-        fetch('/api/admin/pricing')
+        fetch('/api/admin/pricing'),
+        fetch('/api/admin/email/templates')
       ]);
 
-      if (statsRes.status === 401 || regsRes.status === 401 || pricingRes.status === 401) {
+      if (statsRes.status === 401 || regsRes.status === 401 || pricingRes.status === 401 || emailTemplateRes.status === 401) {
         window.location.href = '/admin';
         return;
       }
@@ -307,21 +461,46 @@
       const statsData = await statsRes.json();
       const regsData = await regsRes.json();
       const pricingData = await pricingRes.json();
+      const emailTemplateData = await emailTemplateRes.json();
 
-      if (!statsRes.ok || !regsRes.ok || !pricingRes.ok) {
+      if (!statsRes.ok || !regsRes.ok || !pricingRes.ok || !emailTemplateRes.ok) {
         throw new Error('API error while loading admin data.');
       }
 
       renderStats(statsData.stats);
       allRegistrations = Array.isArray(regsData.registrations) ? regsData.registrations : [];
+      const eligibleIdSet = new Set(getEmailEligibleRecipients().map((item) => String(item.id || '')));
+      Array.from(selectedEmailRecipientIds).forEach((id) => {
+        if (!eligibleIdSet.has(id)) {
+          selectedEmailRecipientIds.delete(id);
+        }
+      });
       filterRegistrations();
       populatePricingForm(pricingData.settings || {});
+      emailTemplates = Array.isArray(emailTemplateData.templates) ? emailTemplateData.templates : [];
+      emailCapabilities = emailTemplateData.capabilities || { provider: 'disabled', maxRecipients: 0 };
+      populateEmailTemplates(emailTemplates);
+      renderEmailRecipientRows();
+      setEmailSelectionControlsState();
+
+      if (emailCapabilities.provider !== 'brevo') {
+        showEmailMessage('error', 'Email provider is not configured. Set Brevo env values first.');
+        if (sendEmailBtn) {
+          sendEmailBtn.disabled = true;
+        }
+      } else if (sendEmailBtn) {
+        sendEmailBtn.disabled = false;
+      }
     } catch (error) {
       statsEl.innerHTML = `<div class="notice error">${error.message}</div>`;
       rowsEl.innerHTML = '<tr><td colspan="7">Failed to load data.</td></tr>';
       allRegistrations = [];
       updateSearchMeta(0, 0, '');
       showPricingMessage('error', 'Failed to load pricing settings.');
+      if (emailRecipientRowsEl) {
+        emailRecipientRowsEl.innerHTML = '<tr><td colspan="4">Failed to load recipients.</td></tr>';
+      }
+      showEmailMessage('error', 'Failed to load email sender data.');
     }
   }
 
@@ -431,6 +610,37 @@
     }
   }
 
+  async function createBackupNow() {
+    if (createBackupBtn) {
+      createBackupBtn.disabled = true;
+      createBackupBtn.textContent = 'Creating backup...';
+    }
+    showBackupMessage('ok', 'Creating backup...');
+
+    try {
+      const response = await fetch('/api/admin/backup', { method: 'POST' });
+      if (response.status === 401) {
+        window.location.href = '/admin';
+        return;
+      }
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Backup creation failed.');
+      }
+
+      const fileName = String(result.file || '').trim();
+      showBackupMessage('ok', fileName ? `Backup created: ${fileName}` : 'Backup created.');
+    } catch (error) {
+      showBackupMessage('error', error.message);
+    } finally {
+      if (createBackupBtn) {
+        createBackupBtn.disabled = false;
+        createBackupBtn.textContent = 'Create backup now';
+      }
+    }
+  }
+
   async function copyRetryPaymentLink(registrationId) {
     const response = await fetch('/api/admin/registrations/retry-link', {
       method: 'POST',
@@ -476,6 +686,161 @@
     window.prompt('Copy retry payment link:', url);
   }
 
+  async function updateAdminPassword(event) {
+    event.preventDefault();
+    if (!passwordFormEl) return;
+
+    const formData = new FormData(passwordFormEl);
+    const payload = {
+      currentPassword: String(formData.get('currentPassword') || ''),
+      newPassword: String(formData.get('newPassword') || ''),
+      confirmPassword: String(formData.get('confirmPassword') || '')
+    };
+
+    if (!payload.currentPassword || !payload.newPassword || !payload.confirmPassword) {
+      showPasswordMessage('error', 'All password fields are required.');
+      return;
+    }
+
+    if (payload.newPassword !== payload.confirmPassword) {
+      showPasswordMessage('error', 'New password and confirmation do not match.');
+      return;
+    }
+
+    if (savePasswordBtn) {
+      savePasswordBtn.disabled = true;
+      savePasswordBtn.textContent = 'Updating password...';
+    }
+    showPasswordMessage('ok', 'Updating password...');
+
+    try {
+      const response = await fetch('/api/admin/password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+
+      if (response.status === 401) {
+        window.location.href = '/admin';
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Password update failed.');
+      }
+
+      passwordFormEl.reset();
+      showPasswordMessage('ok', result.message || 'Admin password updated.');
+    } catch (error) {
+      showPasswordMessage('error', error.message);
+    } finally {
+      if (savePasswordBtn) {
+        savePasswordBtn.disabled = false;
+        savePasswordBtn.textContent = 'Update admin password';
+      }
+    }
+  }
+
+  function selectVisibleEmailRecipients() {
+    getFilteredEmailRecipients().forEach((item) => {
+      selectedEmailRecipientIds.add(String(item.id || ''));
+    });
+    renderEmailRecipientRows();
+  }
+
+  function clearEmailSelection() {
+    selectedEmailRecipientIds.clear();
+    renderEmailRecipientRows();
+  }
+
+  function selectAllActiveRecipients() {
+    getEmailEligibleRecipients().forEach((item) => {
+      selectedEmailRecipientIds.add(String(item.id || ''));
+    });
+    renderEmailRecipientRows();
+  }
+
+  async function sendAdminEmail(event) {
+    event.preventDefault();
+    if (!emailSendFormEl) return;
+
+    const recipientMode = getEmailRecipientMode();
+    const templateKey = String(emailTemplateEl?.value || 'custom').trim() || 'custom';
+    const subject = String(emailSubjectEl?.value || '').trim();
+    const body = String(emailBodyEl?.value || '').trim();
+    const recipientIds = Array.from(selectedEmailRecipientIds);
+
+    if (recipientMode === 'selected' && recipientIds.length === 0) {
+      showEmailMessage('error', 'Select at least one recipient first.');
+      return;
+    }
+
+    if (!subject) {
+      showEmailMessage('error', 'Email subject is required.');
+      return;
+    }
+    if (!body) {
+      showEmailMessage('error', 'Email body is required.');
+      return;
+    }
+
+    if (sendEmailBtn) {
+      sendEmailBtn.disabled = true;
+      sendEmailBtn.textContent = 'Sending...';
+    }
+    showEmailMessage('ok', 'Sending email...');
+
+    try {
+      const response = await fetch('/api/admin/email/send', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          recipientMode,
+          recipientIds,
+          templateKey,
+          subject,
+          body
+        })
+      });
+      const result = await response.json();
+
+      if (response.status === 401) {
+        window.location.href = '/admin';
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Email sending failed.');
+      }
+
+      const failed = Number(result.failedCount || 0);
+      if (failed > 0) {
+        const firstFailure = Array.isArray(result.failures) && result.failures.length
+          ? ` First failure: ${result.failures[0].email} (${result.failures[0].error})`
+          : '';
+        showEmailMessage(
+          'error',
+          `${result.message || 'Email sent with partial failures.'}${firstFailure}`
+        );
+        return;
+      }
+
+      showEmailMessage('ok', result.message || 'Email sent successfully.');
+    } catch (error) {
+      showEmailMessage('error', error.message);
+    } finally {
+      if (sendEmailBtn) {
+        sendEmailBtn.disabled = false;
+        sendEmailBtn.textContent = 'Send email';
+      }
+    }
+  }
+
   if (logoutBtn) {
     logoutBtn.addEventListener('click', logout);
   }
@@ -484,12 +849,67 @@
     exportCsvBtn.addEventListener('click', exportCsv);
   }
 
+  if (createBackupBtn) {
+    createBackupBtn.addEventListener('click', createBackupNow);
+  }
+
   if (pricingFormEl) {
     pricingFormEl.addEventListener('submit', savePricingSettings);
   }
 
+  if (passwordFormEl) {
+    passwordFormEl.addEventListener('submit', updateAdminPassword);
+  }
+
   if (registrationSearchEl) {
     registrationSearchEl.addEventListener('input', filterRegistrations);
+  }
+
+  if (emailRecipientModeEl) {
+    emailRecipientModeEl.addEventListener('change', () => {
+      setEmailSelectionControlsState();
+      renderEmailRecipientRows();
+    });
+  }
+
+  if (emailRecipientSearchEl) {
+    emailRecipientSearchEl.addEventListener('input', renderEmailRecipientRows);
+  }
+
+  if (emailSelectVisibleBtn) {
+    emailSelectVisibleBtn.addEventListener('click', selectVisibleEmailRecipients);
+  }
+
+  if (emailClearSelectionBtn) {
+    emailClearSelectionBtn.addEventListener('click', clearEmailSelection);
+  }
+
+  if (emailSelectAllBtn) {
+    emailSelectAllBtn.addEventListener('click', selectAllActiveRecipients);
+  }
+
+  if (emailTemplateEl) {
+    emailTemplateEl.addEventListener('change', applySelectedTemplateDefaults);
+  }
+
+  if (emailSendFormEl) {
+    emailSendFormEl.addEventListener('submit', sendAdminEmail);
+  }
+
+  if (emailRecipientRowsEl) {
+    emailRecipientRowsEl.addEventListener('change', (event) => {
+      const checkbox = event.target.closest('.js-email-recipient-check');
+      if (!checkbox) return;
+      const id = String(checkbox.getAttribute('data-registration-id') || '').trim();
+      if (!id) return;
+
+      if (checkbox.checked) {
+        selectedEmailRecipientIds.add(id);
+      } else {
+        selectedEmailRecipientIds.delete(id);
+      }
+      renderEmailRecipientRows();
+    });
   }
 
   rowsEl.addEventListener('click', (event) => {

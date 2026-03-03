@@ -1,12 +1,22 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { randomUUID, createHmac, timingSafeEqual } = require('crypto');
+const { randomUUID, randomBytes, createHmac, timingSafeEqual, scryptSync } = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'camp.db');
+const DB_BACKUP_DIR = (() => {
+  const raw = String(process.env.DB_BACKUP_DIR || '').trim();
+  if (!raw) return path.join(DATA_DIR, 'backups');
+  return path.isAbsolute(raw) ? raw : path.resolve(__dirname, raw);
+})();
+const DB_BACKUP_ENABLED = String(process.env.DB_BACKUP_ENABLED || 'true').trim().toLowerCase() !== 'false';
+const DB_BACKUP_RETENTION_DAYS = (() => {
+  const raw = Number(process.env.DB_BACKUP_RETENTION_DAYS || 30);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 30;
+})();
 const LEGACY_REGISTRATIONS_FILE = path.join(DATA_DIR, 'registrations.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const APP_BASE_URL = process.env.APP_BASE_URL || `http://localhost:${PORT}`;
@@ -23,11 +33,13 @@ const MIME_TYPES = {
   '.webp': 'image/webp'
 };
 
-const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'demo-admin-123';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || 'replace-this-secret-in-production';
 const ADMIN_SESSION_TTL_SECONDS = 60 * 60 * 12;
 const ADMIN_SESSION_COOKIE = 'admin_session';
+const ADMIN_PASSWORD_MIN_LENGTH = 8;
+const ADMIN_LOGIN_MAX_FAILURES = 5;
+const ADMIN_LOGIN_BLOCK_MS = 15 * 60 * 1000;
 const RETRY_PAYMENT_LINK_TTL_SECONDS = (() => {
   const raw = Number(process.env.RETRY_PAYMENT_LINK_TTL_SECONDS || 60 * 60 * 24 * 7);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 60 * 60 * 24 * 7;
@@ -42,9 +54,61 @@ const BREVO_API_KEY = String(process.env.BREVO_API_KEY || '').trim();
 const EMAIL_FROM = String(process.env.EMAIL_FROM || '').trim();
 const EMAIL_FROM_NAME = String(process.env.EMAIL_FROM_NAME || 'Ishido Sensei - Summer Seminar').trim();
 const ADMIN_NOTIFY_EMAIL = String(process.env.ADMIN_NOTIFY_EMAIL || '').trim();
+const ADMIN_EMAIL_MAX_RECIPIENTS = (() => {
+  const raw = Number(process.env.ADMIN_EMAIL_MAX_RECIPIENTS || 500);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 500;
+})();
 const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
 const EMAIL_REQUEST_TIMEOUT_MS = 8000;
 const APP_SETTING_KEY_PRICING = 'pricing_settings_v1';
+const APP_SETTING_KEY_ADMIN_AUTH = 'admin_auth_v1';
+const ADMIN_EMAIL_TEMPLATES = [
+  {
+    key: 'important_update',
+    label: 'Important update',
+    subject: 'Important update - Ishido Sensei - Summer Seminar 2026',
+    body: [
+      'Hello {{fullName}},',
+      '',
+      'We would like to share an important update regarding the seminar.',
+      '',
+      'Please read this message carefully and contact us if you have any questions.',
+      '',
+      'Best regards,',
+      'Organizing Team'
+    ].join('\n')
+  },
+  {
+    key: 'program_update',
+    label: 'Program update',
+    subject: 'Program update - Ishido Sensei - Summer Seminar 2026',
+    body: [
+      'Hello {{fullName}},',
+      '',
+      'The seminar program has been updated.',
+      '',
+      'Please check the latest details on the Program page.',
+      '',
+      'Best regards,',
+      'Organizing Team'
+    ].join('\n')
+  },
+  {
+    key: 'payment_reminder',
+    label: 'Payment reminder',
+    subject: 'Payment reminder - Ishido Sensei - Summer Seminar 2026',
+    body: [
+      'Hello {{fullName}},',
+      '',
+      'This is a reminder that your registration is currently in pending payment status.',
+      '',
+      'Please complete payment to finalize your participation.',
+      '',
+      'Best regards,',
+      'Organizing Team'
+    ].join('\n')
+  }
+];
 const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || '').trim();
 const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || '').trim();
 const STRIPE_API_BASE_URL = 'https://api.stripe.com/v1';
@@ -69,6 +133,7 @@ const PRICE_CATALOG = {
     guesthouse: { label: 'Guesthouse', defaultAmount: 135 }
   }
 };
+const adminLoginFailures = new Map();
 
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -186,6 +251,112 @@ function savePricingSettings(db, nextSettings) {
   );
 
   return normalized;
+}
+
+function getAppSettingValue(db, key) {
+  const select = db.prepare('SELECT value FROM app_settings WHERE key = ?');
+  const row = select.get(String(key || ''));
+  return row && typeof row.value === 'string' ? row.value : null;
+}
+
+function setAppSettingValue(db, key, value) {
+  const upsert = db.prepare(`
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      value = excluded.value,
+      updated_at = excluded.updated_at
+  `);
+
+  upsert.run(
+    String(key || ''),
+    String(value ?? ''),
+    new Date().toISOString()
+  );
+}
+
+function createPasswordHash(password) {
+  const salt = randomBytes(16);
+  const derived = scryptSync(String(password || ''), salt, 64);
+  return {
+    algo: 'scrypt',
+    salt: salt.toString('base64'),
+    hash: derived.toString('base64'),
+    changedAt: new Date().toISOString()
+  };
+}
+
+function readAdminAuth(db) {
+  const rawValue = getAppSettingValue(db, APP_SETTING_KEY_ADMIN_AUTH);
+  if (!rawValue) return null;
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    const salt = String(parsed?.salt || '').trim();
+    const hash = String(parsed?.hash || '').trim();
+    const changedAt = String(parsed?.changedAt || '').trim();
+    if (!salt || !hash || !changedAt) {
+      return null;
+    }
+    return {
+      algo: 'scrypt',
+      salt,
+      hash,
+      changedAt
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveAdminAuth(db, authPayload) {
+  const payload = {
+    algo: 'scrypt',
+    salt: String(authPayload?.salt || ''),
+    hash: String(authPayload?.hash || ''),
+    changedAt: String(authPayload?.changedAt || new Date().toISOString())
+  };
+  setAppSettingValue(db, APP_SETTING_KEY_ADMIN_AUTH, JSON.stringify(payload));
+  return payload;
+}
+
+function ensureAdminAuth(db) {
+  const existing = readAdminAuth(db);
+  if (existing) {
+    return existing;
+  }
+
+  const initial = createPasswordHash(ADMIN_PASSWORD);
+  return saveAdminAuth(db, initial);
+}
+
+function verifyPasswordHash(password, authPayload) {
+  if (!authPayload || authPayload.algo !== 'scrypt') {
+    return false;
+  }
+
+  const saltBuffer = Buffer.from(String(authPayload.salt || ''), 'base64');
+  const expectedBuffer = Buffer.from(String(authPayload.hash || ''), 'base64');
+  if (!saltBuffer.length || !expectedBuffer.length) {
+    return false;
+  }
+
+  const actualBuffer = scryptSync(String(password || ''), saltBuffer, expectedBuffer.length);
+  if (actualBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+  return timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
+function isValidAdminPassword(password) {
+  const value = String(password || '');
+  if (value.length < ADMIN_PASSWORD_MIN_LENGTH || value.length > 128) {
+    return false;
+  }
+
+  const hasLetter = /[A-Za-z]/.test(value);
+  const hasDigit = /\d/.test(value);
+  return hasLetter && hasDigit;
 }
 
 function toEnumValue(value, allowedValues, fallbackValue) {
@@ -376,6 +547,120 @@ async function sendBrevoEmail({ toEmail, toName, subject, htmlContent, textConte
   return response.json().catch(() => ({}));
 }
 
+function listAdminEmailTemplates() {
+  return ADMIN_EMAIL_TEMPLATES.map((item) => ({
+    key: item.key,
+    label: item.label,
+    subject: item.subject,
+    body: item.body
+  }));
+}
+
+function resolveAdminEmailTemplate(templateKey) {
+  const key = String(templateKey || '').trim();
+  return ADMIN_EMAIL_TEMPLATES.find((item) => item.key === key) || null;
+}
+
+function getCampTypeLabel(code) {
+  const key = String(code || '').trim();
+  return PRICE_CATALOG.campType?.[key]?.label || key || '-';
+}
+
+function applyEmailTemplateVariables(text, registration) {
+  const input = String(text || '');
+  const fullName = String(registration?.fullName || '').trim();
+  const firstName = fullName ? fullName.split(/\s+/)[0] : '';
+  const mapping = {
+    fullName,
+    firstName,
+    email: String(registration?.email || ''),
+    registrationId: String(registration?.id || ''),
+    campType: getCampTypeLabel(registration?.campType),
+    status: String(registration?.status || ''),
+    amount: formatCurrency(Number(registration?.amount ?? registration?.amountHuf ?? 0), registration?.currency || 'EUR'),
+    currency: String(registration?.currency || 'EUR')
+  };
+
+  return input.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_, token) => {
+    const key = String(token || '');
+    return Object.prototype.hasOwnProperty.call(mapping, key) ? mapping[key] : '';
+  });
+}
+
+function plainTextToHtml(text) {
+  const normalized = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!normalized) return '<p></p>';
+
+  const paragraphs = normalized
+    .split(/\n{2,}/)
+    .map((part) => `<p>${escapeHtml(part).replace(/\n/g, '<br />')}</p>`);
+
+  return paragraphs.join('\n');
+}
+
+function getEligibleEmailRecipients(registrations) {
+  return registrations.filter((item) => {
+    const status = String(item?.status || '');
+    const email = String(item?.email || '').trim();
+    return status !== 'DELETED' && status !== 'ANONYMIZED' && email.length > 0;
+  });
+}
+
+function selectEmailRecipients(registrations, mode, selectedIds) {
+  const eligible = getEligibleEmailRecipients(registrations);
+  const normalizedMode = String(mode || 'selected').trim();
+
+  if (normalizedMode === 'all_active') {
+    return eligible;
+  }
+
+  if (normalizedMode === 'paid') {
+    return eligible.filter((item) => item.status === 'PAID');
+  }
+
+  if (normalizedMode === 'pending_payment') {
+    return eligible.filter((item) => item.status === 'PENDING_PAYMENT');
+  }
+
+  const idSet = new Set(
+    Array.isArray(selectedIds)
+      ? selectedIds.map((id) => String(id || '').trim()).filter(Boolean)
+      : []
+  );
+
+  return eligible.filter((item) => idSet.has(String(item.id || '').trim()));
+}
+
+function insertAdminEmailLog(db, logEntry) {
+  const insert = db.prepare(`
+    INSERT INTO admin_email_logs (
+      id,
+      created_at,
+      requested_by_ip,
+      recipient_mode,
+      recipient_count,
+      success_count,
+      failed_count,
+      template_key,
+      subject,
+      failures_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  insert.run(
+    `mail_${randomUUID()}`,
+    new Date().toISOString(),
+    String(logEntry?.requestedByIp || ''),
+    String(logEntry?.recipientMode || ''),
+    Number(logEntry?.recipientCount || 0),
+    Number(logEntry?.successCount || 0),
+    Number(logEntry?.failedCount || 0),
+    String(logEntry?.templateKey || ''),
+    String(logEntry?.subject || ''),
+    JSON.stringify(Array.isArray(logEntry?.failures) ? logEntry.failures : [])
+  );
+}
+
 function buildRegistrationEmailContent(registration, pricing) {
   const participantName = escapeHtml(registration.fullName || '');
   const registrationId = escapeHtml(registration.id || '');
@@ -399,7 +684,7 @@ function buildRegistrationEmailContent(registration, pricing) {
     <h3>Selected options</h3>
     <ul>${pricingRows}</ul>
     <p><strong>Total:</strong> ${total}</p>
-    <p>This is a confirmation from the demo system. Payment flow is currently in integration mode.</p>
+    <p>This is your registration confirmation email.</p>
   `;
 
   const participantText = [
@@ -415,7 +700,7 @@ function buildRegistrationEmailContent(registration, pricing) {
       return `- ${item.label}: ${formatCurrency(amount, pricing.currency)}`;
     }),
     `Total: ${formatCurrency(totalRaw, pricing.currency)}`,
-    'This is a confirmation from the demo system. Payment flow is currently in integration mode.'
+    'This is your registration confirmation email.'
   ].join('\n');
 
   const adminHtml = `
@@ -494,6 +779,98 @@ function ensureDataDir() {
   }
 }
 
+function ensureBackupDir() {
+  if (!fs.existsSync(DB_BACKUP_DIR)) {
+    fs.mkdirSync(DB_BACKUP_DIR, { recursive: true });
+  }
+}
+
+function formatBackupTimestamp(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  return `${year}${month}${day}-${hours}${minutes}${seconds}`;
+}
+
+function toSqliteStringLiteral(value) {
+  return String(value).replace(/'/g, "''");
+}
+
+function cleanupOldBackups() {
+  ensureBackupDir();
+  const entries = fs.readdirSync(DB_BACKUP_DIR, { withFileTypes: true });
+  const files = entries
+    .filter((entry) => entry.isFile() && /^camp-backup-\d{8}-\d{6}\.db$/.test(entry.name))
+    .map((entry) => path.join(DB_BACKUP_DIR, entry.name));
+
+  if (files.length === 0) return;
+
+  const cutoffMs = Date.now() - DB_BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  for (const filePath of files) {
+    try {
+      const stats = fs.statSync(filePath);
+      if (stats.mtimeMs < cutoffMs) {
+        fs.unlinkSync(filePath);
+      }
+    } catch {
+      // Ignore cleanup errors to avoid breaking the backup cycle.
+    }
+  }
+}
+
+function createDatabaseBackup(db) {
+  ensureBackupDir();
+  const timestamp = formatBackupTimestamp(new Date());
+  const backupFile = path.join(DB_BACKUP_DIR, `camp-backup-${timestamp}.db`);
+  const escapedBackupPath = toSqliteStringLiteral(backupFile);
+  db.exec(`VACUUM INTO '${escapedBackupPath}'`);
+  cleanupOldBackups();
+  return backupFile;
+}
+
+function msUntilNextMidnight(now = new Date()) {
+  const next = new Date(now);
+  next.setHours(24, 0, 0, 0);
+  return Math.max(1000, next.getTime() - now.getTime());
+}
+
+function scheduleDailyBackups(db) {
+  if (!DB_BACKUP_ENABLED) {
+    console.log('SQLite backup scheduler disabled (DB_BACKUP_ENABLED=false).');
+    return () => {};
+  }
+
+  let timer = null;
+
+  const scheduleNext = () => {
+    const delayMs = msUntilNextMidnight();
+    timer = setTimeout(async () => {
+      try {
+        const backupFile = await runWithSqliteRetry(() => createDatabaseBackup(db));
+        console.log(`SQLite backup created: ${backupFile}`);
+      } catch (error) {
+        console.error(`SQLite backup failed: ${error.message}`);
+      } finally {
+        scheduleNext();
+      }
+    }, delayMs);
+
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+  };
+
+  scheduleNext();
+  return () => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  };
+}
+
 function initDatabase() {
   ensureDataDir();
   const db = new DatabaseSync(DB_FILE);
@@ -549,10 +926,24 @@ function initDatabase() {
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS admin_email_logs (
+      id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      requested_by_ip TEXT NOT NULL,
+      recipient_mode TEXT NOT NULL,
+      recipient_count INTEGER NOT NULL,
+      success_count INTEGER NOT NULL,
+      failed_count INTEGER NOT NULL,
+      template_key TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      failures_json TEXT NOT NULL
+    );
   `);
 
   ensureRegistrationColumns(db);
   migrateLegacyJsonIfNeeded(db);
+  ensureAdminAuth(db);
   return db;
 }
 
@@ -1386,9 +1777,10 @@ function signRetryPaymentPayload(encodedPayload) {
   return createHmac('sha256', ADMIN_SESSION_SECRET).update(`retry-payment:${encodedPayload}`).digest('base64url');
 }
 
-function buildAdminSessionToken() {
+function buildAdminSessionToken(passwordChangedAt) {
   const payload = {
-    username: ADMIN_USERNAME,
+    role: 'admin',
+    passwordChangedAt: String(passwordChangedAt || ''),
     exp: Math.floor(Date.now() / 1000) + ADMIN_SESSION_TTL_SECONDS
   };
   const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
@@ -1413,13 +1805,13 @@ function buildRetryPaymentToken(registrationId) {
 }
 
 function safeEqualStrings(left, right) {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
+  const leftBuffer = Buffer.from(String(left ?? ''));
+  const rightBuffer = Buffer.from(String(right ?? ''));
   if (leftBuffer.length !== rightBuffer.length) return false;
   return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function verifyAdminSessionToken(token) {
+function verifyAdminSessionToken(token, db) {
   if (typeof token !== 'string' || !token.includes('.')) return false;
 
   const [encodedPayload, signature, ...rest] = token.split('.');
@@ -1430,7 +1822,15 @@ function verifyAdminSessionToken(token) {
 
   try {
     const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
-    if (payload.username !== ADMIN_USERNAME) return false;
+    if (payload.role !== 'admin') return false;
+    const passwordChangedAt = String(payload.passwordChangedAt || '');
+    let adminAuth = null;
+    try {
+      adminAuth = readAdminAuth(db);
+    } catch {
+      return false;
+    }
+    if (!adminAuth || !safeEqualStrings(passwordChangedAt, adminAuth.changedAt)) return false;
     if (typeof payload.exp !== 'number') return false;
     if (payload.exp < Math.floor(Date.now() / 1000)) return false;
     return true;
@@ -1497,10 +1897,46 @@ function verifyStripeWebhookSignature(rawBodyBuffer, stripeSignatureHeader) {
   }
 }
 
-function isAdminAuthenticated(req) {
+function getClientIp(req) {
+  const forwardedFor = String(req.headers['x-forwarded-for'] || '').trim();
+  if (forwardedFor) {
+    const first = forwardedFor.split(',')[0].trim();
+    if (first) return first;
+  }
+  return String(req.socket?.remoteAddress || 'unknown');
+}
+
+function registerAdminLoginFailure(ip) {
+  const key = String(ip || 'unknown');
+  const current = adminLoginFailures.get(key);
+  const now = Date.now();
+  const lastFailedAt = Number(current?.lastFailedAt || 0);
+  const previousCount = now - lastFailedAt <= ADMIN_LOGIN_BLOCK_MS ? Number(current?.count || 0) : 0;
+  const count = previousCount + 1;
+  const blockedUntil = count >= ADMIN_LOGIN_MAX_FAILURES ? now + ADMIN_LOGIN_BLOCK_MS : 0;
+  adminLoginFailures.set(key, { count, blockedUntil, lastFailedAt: now });
+}
+
+function clearAdminLoginFailures(ip) {
+  adminLoginFailures.delete(String(ip || 'unknown'));
+}
+
+function getAdminLoginBlockRemainingMs(ip) {
+  const key = String(ip || 'unknown');
+  const current = adminLoginFailures.get(key);
+  if (!current) return 0;
+  const remaining = Number(current.blockedUntil || 0) - Date.now();
+  if (remaining <= 0) {
+    adminLoginFailures.delete(key);
+    return 0;
+  }
+  return remaining;
+}
+
+function isAdminAuthenticated(req, db) {
   const cookies = parseCookies(req);
   const token = cookies[ADMIN_SESSION_COOKIE];
-  return verifyAdminSessionToken(token);
+  return verifyAdminSessionToken(token, db);
 }
 
 function serveFile(res, filePath) {
@@ -1665,18 +2101,166 @@ function createServer(options = {}) {
     }
 
     if (req.method === 'GET' && pathname === '/admin') {
-      const fileName = isAdminAuthenticated(req) ? 'admin.html' : 'admin-login.html';
+      const fileName = isAdminAuthenticated(req, db) ? 'admin.html' : 'admin-login.html';
       serveFile(res, path.join(PUBLIC_DIR, fileName));
       return;
     }
 
     if (req.method === 'GET' && pathname === '/api/admin/session') {
-      sendJson(res, 200, { authenticated: isAdminAuthenticated(req) });
+      sendJson(res, 200, { authenticated: isAdminAuthenticated(req, db) });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/admin/email/templates') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      sendJson(res, 200, {
+        templates: listAdminEmailTemplates(),
+        capabilities: {
+          provider: isBrevoEnabled() ? 'brevo' : 'disabled',
+          maxRecipients: ADMIN_EMAIL_MAX_RECIPIENTS
+        }
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/admin/email/send') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+      if (!isBrevoEnabled()) {
+        sendJson(res, 503, { error: 'Email sending is not configured. Set Brevo env values first.' });
+        return;
+      }
+
+      try {
+        const body = await parseJsonBody(req);
+        const templateKeyRaw = String(body?.templateKey || 'custom').trim();
+        const templateKey = templateKeyRaw || 'custom';
+        const template = templateKey !== 'custom' ? resolveAdminEmailTemplate(templateKey) : null;
+        if (templateKey !== 'custom' && !template) {
+          sendJson(res, 400, { error: 'Invalid template key.' });
+          return;
+        }
+
+        let subject = String(body?.subject || '').trim();
+        let content = String(body?.body || '');
+        if (!subject && template) {
+          subject = template.subject;
+        }
+        if (!content.trim() && template) {
+          content = template.body;
+        }
+
+        content = content.trim();
+        if (!subject) {
+          sendJson(res, 400, { error: 'Email subject is required.' });
+          return;
+        }
+        if (!content) {
+          sendJson(res, 400, { error: 'Email body is required.' });
+          return;
+        }
+        if (subject.length > 180) {
+          sendJson(res, 400, { error: 'Email subject is too long (max 180 characters).' });
+          return;
+        }
+        if (content.length > 20000) {
+          sendJson(res, 400, { error: 'Email body is too long (max 20000 characters).' });
+          return;
+        }
+
+        const recipientMode = String(body?.recipientMode || 'selected').trim() || 'selected';
+        const selectedIds = Array.isArray(body?.recipientIds) ? body.recipientIds : [];
+        const registrations = readRegistrations(db);
+        const recipients = selectEmailRecipients(registrations, recipientMode, selectedIds);
+
+        if (recipients.length === 0) {
+          sendJson(res, 400, { error: 'No eligible recipients found for the selected recipient mode.' });
+          return;
+        }
+        if (recipients.length > ADMIN_EMAIL_MAX_RECIPIENTS) {
+          sendJson(res, 400, {
+            error: `Too many recipients in one send operation. Limit: ${ADMIN_EMAIL_MAX_RECIPIENTS}.`
+          });
+          return;
+        }
+
+        const failures = [];
+        let successCount = 0;
+        for (const registration of recipients) {
+          const renderedSubject = applyEmailTemplateVariables(subject, registration).trim();
+          const renderedText = applyEmailTemplateVariables(content, registration).trim();
+          if (!renderedSubject || !renderedText) {
+            failures.push({
+              registrationId: registration.id,
+              email: registration.email,
+              error: 'Rendered message is empty.'
+            });
+            continue;
+          }
+
+          try {
+            await sendBrevoEmail({
+              toEmail: registration.email,
+              toName: registration.fullName,
+              subject: renderedSubject,
+              textContent: renderedText,
+              htmlContent: plainTextToHtml(renderedText)
+            });
+            successCount += 1;
+          } catch (error) {
+            failures.push({
+              registrationId: registration.id,
+              email: registration.email,
+              error: error.message
+            });
+          }
+        }
+
+        const failedCount = failures.length;
+        try {
+          await runWithSqliteRetry(() => insertAdminEmailLog(db, {
+            requestedByIp: getClientIp(req),
+            recipientMode,
+            recipientCount: recipients.length,
+            successCount,
+            failedCount,
+            templateKey,
+            subject,
+            failures: failures.slice(0, 50)
+          }));
+        } catch (logError) {
+          console.error(`Admin email log write failed: ${logError.message}`);
+        }
+
+        const statusCode = failedCount === 0 ? 200 : successCount > 0 ? 207 : 502;
+        sendJson(res, statusCode, {
+          message: failedCount === 0
+            ? `Email sent successfully to ${successCount} recipient(s).`
+            : `Email sending completed with failures. Success: ${successCount}, Failed: ${failedCount}.`,
+          recipientMode,
+          totalRecipients: recipients.length,
+          successCount,
+          failedCount,
+          failures: failures.slice(0, 20)
+        });
+      } catch (error) {
+        if (isSqliteBusyError(error)) {
+          sendJson(res, 503, { error: 'Database is currently busy. Please try again in a few seconds.' });
+          return;
+        }
+        sendJson(res, 400, { error: error.message || 'Invalid request' });
+      }
       return;
     }
 
     if (req.method === 'GET' && pathname === '/api/admin/pricing') {
-      if (!isAdminAuthenticated(req)) {
+      if (!isAdminAuthenticated(req, db)) {
         sendJson(res, 401, { error: 'Admin login required.' });
         return;
       }
@@ -1689,7 +2273,7 @@ function createServer(options = {}) {
     }
 
     if (req.method === 'POST' && pathname === '/api/admin/pricing') {
-      if (!isAdminAuthenticated(req)) {
+      if (!isAdminAuthenticated(req, db)) {
         sendJson(res, 401, { error: 'Admin login required.' });
         return;
       }
@@ -1723,18 +2307,33 @@ function createServer(options = {}) {
     if (req.method === 'POST' && pathname === '/api/admin/login') {
       try {
         const body = await parseJsonBody(req);
-        const username = String(body.username || '').trim();
         const password = String(body.password || '');
+        const ip = getClientIp(req);
+        const remainingBlockMs = getAdminLoginBlockRemainingMs(ip);
 
-        if (!safeEqualStrings(username, ADMIN_USERNAME) || !safeEqualStrings(password, ADMIN_PASSWORD)) {
-          sendJson(res, 401, { error: 'Invalid username or password.' });
+        if (remainingBlockMs > 0) {
+          const retryAfterSeconds = Math.max(1, Math.ceil(remainingBlockMs / 1000));
+          res.setHeader('Retry-After', String(retryAfterSeconds));
+          sendJson(res, 429, { error: `Too many failed login attempts. Try again in ${retryAfterSeconds} seconds.` });
           return;
         }
 
-        const token = buildAdminSessionToken();
+        const adminAuth = await runWithSqliteRetry(() => ensureAdminAuth(db));
+        if (!verifyPasswordHash(password, adminAuth)) {
+          registerAdminLoginFailure(ip);
+          sendJson(res, 401, { error: 'Invalid password.' });
+          return;
+        }
+
+        clearAdminLoginFailures(ip);
+        const token = buildAdminSessionToken(adminAuth.changedAt);
         setAdminSessionCookie(res, token, ADMIN_SESSION_TTL_SECONDS);
         sendJson(res, 200, { message: 'Login successful.' });
       } catch (error) {
+        if (isSqliteBusyError(error)) {
+          sendJson(res, 503, { error: 'Database is currently busy. Please try again in a few seconds.' });
+          return;
+        }
         sendJson(res, 400, { error: error.message || 'Invalid request' });
       }
       return;
@@ -1746,8 +2345,69 @@ function createServer(options = {}) {
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/api/admin/password') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      try {
+        const body = await parseJsonBody(req);
+        const currentPassword = String(body.currentPassword || '');
+        const nextPassword = String(body.newPassword || '');
+        const confirmPassword = String(body.confirmPassword || '');
+
+        if (!currentPassword || !nextPassword || !confirmPassword) {
+          sendJson(res, 400, { error: 'All password fields are required.' });
+          return;
+        }
+
+        if (!safeEqualStrings(nextPassword, confirmPassword)) {
+          sendJson(res, 400, { error: 'New password and confirmation do not match.' });
+          return;
+        }
+
+        if (!isValidAdminPassword(nextPassword)) {
+          sendJson(
+            res,
+            400,
+            { error: `Password must be at least ${ADMIN_PASSWORD_MIN_LENGTH} characters and include letters and numbers.` }
+          );
+          return;
+        }
+
+        const currentAuth = await runWithSqliteRetry(() => ensureAdminAuth(db));
+        if (!verifyPasswordHash(currentPassword, currentAuth)) {
+          sendJson(res, 401, { error: 'Current password is incorrect.' });
+          return;
+        }
+
+        if (verifyPasswordHash(nextPassword, currentAuth)) {
+          sendJson(res, 400, { error: 'New password must be different from the current password.' });
+          return;
+        }
+
+        const updatedAuth = createPasswordHash(nextPassword);
+        await runWithSqliteRetry(() => saveAdminAuth(db, updatedAuth));
+
+        const token = buildAdminSessionToken(updatedAuth.changedAt);
+        setAdminSessionCookie(res, token, ADMIN_SESSION_TTL_SECONDS);
+        sendJson(res, 200, {
+          message: 'Admin password updated successfully.',
+          changedAt: updatedAuth.changedAt
+        });
+      } catch (error) {
+        if (isSqliteBusyError(error)) {
+          sendJson(res, 503, { error: 'Database is currently busy. Please try again in a few seconds.' });
+          return;
+        }
+        sendJson(res, 400, { error: error.message || 'Invalid request' });
+      }
+      return;
+    }
+
     if (req.method === 'GET' && pathname === '/api/stats') {
-      if (!isAdminAuthenticated(req)) {
+      if (!isAdminAuthenticated(req, db)) {
         sendJson(res, 401, { error: 'Admin login required.' });
         return;
       }
@@ -1757,7 +2417,7 @@ function createServer(options = {}) {
     }
 
     if (req.method === 'GET' && pathname === '/api/registrations') {
-      if (!isAdminAuthenticated(req)) {
+      if (!isAdminAuthenticated(req, db)) {
         sendJson(res, 401, { error: 'Admin login required.' });
         return;
       }
@@ -1767,7 +2427,7 @@ function createServer(options = {}) {
     }
 
     if (req.method === 'GET' && pathname === '/api/admin/export.csv') {
-      if (!isAdminAuthenticated(req)) {
+      if (!isAdminAuthenticated(req, db)) {
         sendJson(res, 401, { error: 'Admin login required.' });
         return;
       }
@@ -1785,8 +2445,31 @@ function createServer(options = {}) {
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/api/admin/backup') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      try {
+        const backupFile = await runWithSqliteRetry(() => createDatabaseBackup(db));
+        sendJson(res, 200, {
+          message: 'Database backup created.',
+          file: path.basename(backupFile),
+          createdAt: new Date().toISOString()
+        });
+      } catch (error) {
+        if (isSqliteBusyError(error)) {
+          sendJson(res, 503, { error: 'Database is currently busy. Please try again in a few seconds.' });
+          return;
+        }
+        sendJson(res, 500, { error: error.message || 'Failed to create backup.' });
+      }
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/admin/registrations/mark-deleted') {
-      if (!isAdminAuthenticated(req)) {
+      if (!isAdminAuthenticated(req, db)) {
         sendJson(res, 401, { error: 'Admin login required.' });
         return;
       }
@@ -1818,7 +2501,7 @@ function createServer(options = {}) {
     }
 
     if (req.method === 'POST' && pathname === '/api/admin/registrations/retry-link') {
-      if (!isAdminAuthenticated(req)) {
+      if (!isAdminAuthenticated(req, db)) {
         sendJson(res, 401, { error: 'Admin login required.' });
         return;
       }
@@ -1865,7 +2548,7 @@ function createServer(options = {}) {
     }
 
     if (req.method === 'POST' && pathname === '/api/admin/registrations/anonymize') {
-      if (!isAdminAuthenticated(req)) {
+      if (!isAdminAuthenticated(req, db)) {
         sendJson(res, 401, { error: 'Admin login required.' });
         return;
       }
@@ -1993,7 +2676,7 @@ function createServer(options = {}) {
 
         if (retryPayload) {
           registrationId = retryPayload.registrationId;
-        } else if (!isAdminAuthenticated(req)) {
+        } else if (!isAdminAuthenticated(req, db)) {
           sendJson(res, 401, { error: 'Admin login required.' });
           return;
         }
@@ -2021,7 +2704,7 @@ function createServer(options = {}) {
 
     if (req.method === 'POST' && pathname === '/api/invoices/create') {
       sendJson(res, 501, {
-        error: 'Szamlazz.hu integration disabled in demo mode.',
+        error: 'Szamlazz.hu integration is not configured on this server.',
         nextStep: 'Trigger this endpoint after successful Stripe webhook processing.'
       });
       return;
@@ -2078,13 +2761,15 @@ function createServer(options = {}) {
 
 if (require.main === module) {
   const db = initDatabase();
+  const stopBackupScheduler = scheduleDailyBackups(db);
   const server = createServer({ db });
 
   server.listen(PORT, () => {
-    console.log(`Iaido Camp demo running on http://localhost:${PORT}`);
+    console.log(`Iaido Camp server running on http://localhost:${PORT}`);
   });
 
   process.on('exit', () => {
+    stopBackupScheduler();
     db.close();
   });
 }

@@ -359,7 +359,7 @@ h1 {
   margin-bottom: 0;
 }
 
-img.demo {
+.venue-photo {
   width: 100%;
   height: auto;
   border-radius: 16px;
@@ -371,7 +371,7 @@ img.demo {
   margin: 0;
 }
 
-.venue-photos img.demo {
+.venue-photos .venue-photo {
   display: block;
   object-fit: contain;
 }

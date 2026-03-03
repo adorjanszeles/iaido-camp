@@ -15,12 +15,11 @@
 
     const formData = new FormData(form);
     const payload = {
-      username: String(formData.get('username') || '').trim(),
       password: String(formData.get('password') || '')
     };
 
-    if (!payload.username || !payload.password) {
-      showMessage('error', 'Username and password are required.');
+    if (!payload.password) {
+      showMessage('error', 'Password is required.');
       return;
     }
 
