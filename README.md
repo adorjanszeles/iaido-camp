@@ -13,7 +13,6 @@ Ez a projekt egy ideiglenes tábori weboldal demó:
 ## Mi működik most
 - Regisztrációs űrlap a kért mezőkkel
 - Csomagválasztás: `Iaido` / `Jodo` / `Iaido + Jodo`
-- Opcionális étkezés és szállás választás
 - Fizetés kizárólag EUR pénznemben
 - Élő árkalkuláció a jelentkezési oldalon (EUR)
 - Magánszemély számlázási adatok bekérése
@@ -30,13 +29,15 @@ Ez a projekt egy ideiglenes tábori weboldal demó:
 - Hozzájárulás verzió és időbélyeg mentése minden regisztrációnál
 - CSV export az admin felületről
 - Egyszerű statisztika API és admin lista
+- Stripe Checkout session létrehozás regisztráció után
+- Stripe webhook alapú státuszfrissítés (`PAID`)
+- Adminból egyedi újrafizetési link generálás és másolás
 
 ## Adattárolás
 - Aktív adattár: `data/camp.db` (SQLite)
 - Egyszeri automatikus migráció: ha létezik `data/registrations.json` és a DB még üres, a rendszer áthozza az adatokat SQLite-ba.
 
 ## Mi nincs még bekötve
-- Stripe fizetés
 - Számlázz.hu számlakiállítás
 - Google Sheets adattárolás
 
@@ -54,14 +55,21 @@ EMAIL_FROM=no-reply@your-domain.com
 EMAIL_FROM_NAME=Ishido Sensei - Summer Seminar
 ADMIN_NOTIFY_EMAIL=you@example.com
 APP_BASE_URL=https://your-domain.com
+STRIPE_SECRET_KEY=sk_live_or_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+# Optional
+STRIPE_SUCCESS_URL=https://your-domain.com/registration?payment=success
+STRIPE_CANCEL_URL=https://your-domain.com/registration?payment=cancel
+RETRY_PAYMENT_LINK_TTL_SECONDS=604800
 ```
 
-A fenti integrációkhoz stub API végpontok már elérhetők:
+A fenti integrációkhoz elérhető API végpontok:
 - `GET /api/pricing`
 - `GET /api/admin/pricing`
 - `POST /api/admin/pricing`
 - `POST /api/admin/registrations/mark-deleted`
 - `POST /api/admin/registrations/anonymize`
+- `POST /api/admin/registrations/retry-link`
 - `GET /api/admin/export.csv`
 - `POST /api/payments/create-checkout-session`
 - `POST /api/invoices/create`

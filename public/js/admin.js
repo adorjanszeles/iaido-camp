@@ -151,6 +151,7 @@
         const camp = formatOption('campType', item.campType);
         const isDeleted = item.status === 'DELETED';
         const isAnonymized = item.status === 'ANONYMIZED';
+        const isPaid = item.status === 'PAID';
         const amount = Number(item.amount ?? item.amountHuf ?? 0);
         const deleteAction = isDeleted || isAnonymized
           ? '<span class="helper">-</span>'
@@ -158,8 +159,11 @@
         const anonymizeAction = isAnonymized
           ? '<span class="helper">Anonymized</span>'
           : `<button class="btn secondary btn-small js-anonymize" data-registration-id="${item.id}" type="button">GDPR anonymize</button>`;
+        const retryLinkAction = isDeleted || isAnonymized || isPaid
+          ? '<span class="helper">-</span>'
+          : `<button class="btn secondary btn-small js-copy-retry-link" data-registration-id="${item.id}" type="button">Copy payment link</button>`;
         const detailsToggle = `<button class="btn secondary btn-small js-toggle-details" data-registration-id="${item.id}" aria-expanded="false" type="button">Show details</button>`;
-        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}`;
+        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${retryLinkAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}`;
         const detailRow = `
           <tr class="registration-details-row" data-details-row="${item.id}" hidden>
             <td colspan="7">
@@ -427,6 +431,51 @@
     }
   }
 
+  async function copyRetryPaymentLink(registrationId) {
+    const response = await fetch('/api/admin/registrations/retry-link', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ registrationId })
+    });
+
+    const result = await response.json();
+    if (response.status === 401) {
+      window.location.href = '/admin';
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to generate retry payment link.');
+    }
+
+    const url = String(result.url || '');
+    if (!url) {
+      throw new Error('Retry link was not returned by the server.');
+    }
+
+    let copied = false;
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(url);
+      copied = true;
+    } else {
+      const tempInput = document.createElement('input');
+      tempInput.value = url;
+      document.body.appendChild(tempInput);
+      tempInput.select();
+      copied = document.execCommand('copy');
+      tempInput.remove();
+    }
+
+    if (copied) {
+      window.alert(`Retry payment link copied.\nExpires at: ${result.expiresAt}`);
+      return;
+    }
+
+    window.prompt('Copy retry payment link:', url);
+  }
+
   if (logoutBtn) {
     logoutBtn.addEventListener('click', logout);
   }
@@ -463,6 +512,16 @@
       const registrationId = deleteButton.getAttribute('data-registration-id');
       if (!registrationId) return;
       markDeleted(registrationId);
+      return;
+    }
+
+    const retryLinkButton = event.target.closest('.js-copy-retry-link');
+    if (retryLinkButton) {
+      const registrationId = retryLinkButton.getAttribute('data-registration-id');
+      if (!registrationId) return;
+      copyRetryPaymentLink(registrationId).catch((error) => {
+        window.alert(error.message);
+      });
       return;
     }
 

@@ -96,6 +96,24 @@
     messageEl.textContent = text;
   }
 
+  function showPaymentReturnMessage() {
+    const url = new URL(window.location.href);
+    const params = url.searchParams;
+    const payment = String(params.get('payment') || '').trim().toLowerCase();
+    if (!payment) return;
+
+    if (payment === 'success') {
+      showMessage('ok', 'Payment process completed. Your payment status will be finalized shortly.');
+    } else if (payment === 'cancel') {
+      showMessage('error', 'Payment was cancelled. You can try again using your payment link.');
+    }
+
+    params.delete('payment');
+    params.delete('registrationId');
+    const nextUrl = `${url.pathname}${params.toString() ? `?${params.toString()}` : ''}`;
+    window.history.replaceState({}, document.title, nextUrl);
+  }
+
   function getOption(groupName, code, fallbackCode) {
     const group = pricingConfig[groupName] || {};
     const option = group[code] || group[fallbackCode] || null;
@@ -235,13 +253,16 @@
       const amount = Number(result.pricing?.total ?? result.pricing?.totalAmount ?? result.pricing?.totalHuf ?? 0);
       const currency = String(result.pricing?.currency || 'EUR').toUpperCase();
       const amountText = formatCurrency(amount, currency);
+      const checkoutUrl = String(result.payment?.checkoutUrl || '').trim();
+      if (checkoutUrl) {
+        window.location.href = checkoutUrl;
+        return;
+      }
+
       form.reset();
       syncExamFields();
       renderPriceSummary();
-      showMessage(
-        'ok',
-        `Saved successfully (${result.registrationId}). Calculated total: ${amountText}. Stripe redirect is not enabled in demo mode yet.`
-      );
+      showMessage('error', `Registration saved (${result.registrationId}), but payment link creation failed. Amount: ${amountText}. Please contact the organizer.`);
     } catch (error) {
       showMessage('error', `Failed to submit the form: ${error.message}`);
     } finally {
@@ -257,6 +278,7 @@
   campTypeEl.addEventListener('change', renderPriceSummary);
   form.addEventListener('submit', submitForm);
 
+  showPaymentReturnMessage();
   syncExamFields();
   loadPricingConfig();
 })();

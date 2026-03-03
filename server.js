@@ -28,6 +28,10 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'demo-admin-123';
 const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || 'replace-this-secret-in-production';
 const ADMIN_SESSION_TTL_SECONDS = 60 * 60 * 12;
 const ADMIN_SESSION_COOKIE = 'admin_session';
+const RETRY_PAYMENT_LINK_TTL_SECONDS = (() => {
+  const raw = Number(process.env.RETRY_PAYMENT_LINK_TTL_SECONDS || 60 * 60 * 24 * 7);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 60 * 60 * 24 * 7;
+})();
 const PRIVACY_POLICY_VERSION = '2026-02-26';
 const TERMS_VERSION = '2026-02-26';
 const SQLITE_BUSY_TIMEOUT_MS = 5000;
@@ -41,6 +45,13 @@ const ADMIN_NOTIFY_EMAIL = String(process.env.ADMIN_NOTIFY_EMAIL || '').trim();
 const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
 const EMAIL_REQUEST_TIMEOUT_MS = 8000;
 const APP_SETTING_KEY_PRICING = 'pricing_settings_v1';
+const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || '').trim();
+const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || '').trim();
+const STRIPE_API_BASE_URL = 'https://api.stripe.com/v1';
+const STRIPE_REQUEST_TIMEOUT_MS = 10000;
+const STRIPE_WEBHOOK_TOLERANCE_SECONDS = 300;
+const STRIPE_SUCCESS_URL = String(process.env.STRIPE_SUCCESS_URL || `${APP_BASE_URL}/registration?payment=success`).trim();
+const STRIPE_CANCEL_URL = String(process.env.STRIPE_CANCEL_URL || `${APP_BASE_URL}/registration?payment=cancel`).trim();
 const PRICE_CATALOG = {
   campType: {
     iaido: { label: 'Iaido seminar', defaultAmount: 149 },
@@ -225,6 +236,99 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function isStripeEnabled() {
+  return STRIPE_SECRET_KEY.length > 0;
+}
+
+function toStripeMinorUnits(amount, currency = 'EUR') {
+  const normalizedCurrency = String(currency || 'EUR').trim().toUpperCase();
+  const numeric = Number(amount || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    throw new Error('Invalid payment amount.');
+  }
+
+  if (normalizedCurrency === 'EUR') {
+    return Math.round(numeric * 100);
+  }
+
+  throw new Error(`Unsupported Stripe currency: ${normalizedCurrency}`);
+}
+
+function createStripeFormBody(fields) {
+  const body = new URLSearchParams();
+  for (const [key, value] of Object.entries(fields)) {
+    body.append(key, String(value));
+  }
+  return body;
+}
+
+function createError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = Number(statusCode) || 500;
+  return error;
+}
+
+async function createStripeCheckoutSession(registration, options = {}) {
+  if (!isStripeEnabled()) {
+    throw createError(503, 'Stripe is not configured. Missing STRIPE_SECRET_KEY.');
+  }
+
+  const currency = String(registration.currency || 'EUR').toLowerCase();
+  const amountMinor = toStripeMinorUnits(registration.amount ?? registration.amountHuf ?? 0, registration.currency || 'EUR');
+  const packageLabel = PRICE_CATALOG.campType?.[registration.campType]?.label || 'Seminar package';
+  const successUrl = String(options.successUrl || STRIPE_SUCCESS_URL).trim();
+  const cancelUrl = String(options.cancelUrl || STRIPE_CANCEL_URL).trim();
+
+  const formBody = createStripeFormBody({
+    mode: 'payment',
+    success_url: successUrl,
+    cancel_url: cancelUrl,
+    customer_email: registration.email,
+    client_reference_id: registration.id,
+    'metadata[registration_id]': registration.id,
+    'metadata[source]': options.source || 'registration',
+    'line_items[0][quantity]': 1,
+    'line_items[0][price_data][currency]': currency,
+    'line_items[0][price_data][unit_amount]': amountMinor,
+    'line_items[0][price_data][product_data][name]': packageLabel,
+    'line_items[0][price_data][product_data][description]': 'Ishido Sensei - Summer Seminar 2026'
+  });
+
+  const response = await fetch(`${STRIPE_API_BASE_URL}/checkout/sessions`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${STRIPE_SECRET_KEY}`,
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body: formBody,
+    signal: AbortSignal.timeout(STRIPE_REQUEST_TIMEOUT_MS)
+  });
+
+  const raw = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    const stripeMessage = payload?.error?.message || raw || 'Stripe API request failed.';
+    throw createError(response.status >= 400 && response.status < 500 ? 400 : 502, `Stripe session creation failed: ${stripeMessage}`);
+  }
+
+  const checkoutUrl = String(payload?.url || '').trim();
+  const sessionId = String(payload?.id || '').trim();
+  if (!checkoutUrl || !sessionId) {
+    throw createError(502, 'Stripe response did not include checkout URL.');
+  }
+
+  return {
+    id: sessionId,
+    url: checkoutUrl
+  };
 }
 
 function isBrevoEnabled() {
@@ -682,6 +786,39 @@ function readRegistrations(db) {
   return rows.map(mapRegistrationRow);
 }
 
+function getRegistrationById(db, registrationId) {
+  const row = db.prepare('SELECT * FROM registrations WHERE id = ?').get(String(registrationId || '').trim());
+  if (!row) return null;
+  return mapRegistrationRow(row);
+}
+
+async function createCheckoutSessionForRegistration(db, registrationId, options = {}) {
+  const registration = getRegistrationById(db, registrationId);
+  if (!registration) {
+    throw createError(404, 'Registration not found.');
+  }
+
+  if (registration.status === 'PAID') {
+    throw createError(400, 'Registration is already paid.');
+  }
+  if (registration.status === 'DELETED' || registration.status === 'ANONYMIZED') {
+    throw createError(400, `Cannot create payment session for status: ${registration.status}.`);
+  }
+
+  const successUrl = options.successUrl || `${APP_BASE_URL}/registration?payment=success&registrationId=${encodeURIComponent(registration.id)}`;
+  const cancelUrl = options.cancelUrl || `${APP_BASE_URL}/registration?payment=cancel&registrationId=${encodeURIComponent(registration.id)}`;
+
+  const session = await createStripeCheckoutSession(registration, {
+    ...options,
+    successUrl,
+    cancelUrl
+  });
+  return {
+    registration,
+    session
+  };
+}
+
 function insertRegistration(db, registration) {
   const currentGradeIaido = String(registration.currentGradeIaido || '').trim();
   const currentGradeJodo = String(registration.currentGradeJodo || '').trim();
@@ -825,6 +962,29 @@ function parseJsonBody(req) {
       } catch {
         reject(new Error('Invalid JSON body'));
       }
+    });
+
+    req.on('error', () => reject(new Error('Request stream error')));
+  });
+}
+
+function parseRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > 2 * 1024 * 1024) {
+        reject(new Error('Request body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on('end', () => {
+      resolve(Buffer.concat(chunks));
     });
 
     req.on('error', () => reject(new Error('Request stream error')));
@@ -1014,6 +1174,53 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function sendHtml(res, statusCode, html) {
+  res.writeHead(statusCode, { 'Content-Type': MIME_TYPES['.html'] });
+  res.end(html);
+}
+
+function buildRetryPaymentPage({ title, message, registration }) {
+  const safeTitle = escapeHtml(title || 'Retry Payment');
+  const safeMessage = escapeHtml(message || '');
+  const details = registration
+    ? `
+      <div class="box">
+        <p><strong>Name:</strong> ${escapeHtml(registration.fullName || '-')}</p>
+        <p><strong>Email:</strong> ${escapeHtml(registration.email || '-')}</p>
+        <p><strong>Registration ID:</strong> ${escapeHtml(registration.id || '-')}</p>
+        <p><strong>Amount:</strong> ${escapeHtml(formatCurrency(registration.amount ?? registration.amountHuf ?? 0, registration.currency || 'EUR'))}</p>
+        <p><strong>Status:</strong> ${escapeHtml(registration.status || '-')}</p>
+      </div>
+    `
+    : '';
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${safeTitle}</title>
+    <style>
+      body { font-family: "Trebuchet MS", sans-serif; margin: 0; padding: 2rem 1rem; background: #eef4fb; color: #18344f; }
+      .wrap { max-width: 760px; margin: 0 auto; }
+      .card { background: #fff; border: 1px solid #c8d9eb; border-radius: 14px; padding: 1.2rem; }
+      h1 { margin-top: 0; font-family: "Palatino Linotype", serif; }
+      .box { margin-top: 1rem; padding: 0.8rem; border: 1px solid #d7e5f3; border-radius: 10px; background: #f8fbff; }
+      p { margin: 0.35rem 0; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1>${safeTitle}</h1>
+        <p>${safeMessage}</p>
+        ${details}
+      </div>
+    </div>
+  </body>
+</html>`;
+}
+
 function escapeCsvValue(value) {
   const stringValue = String(value ?? '');
   if (/[",\n\r]/.test(stringValue)) {
@@ -1174,6 +1381,10 @@ function signSessionPayload(encodedPayload) {
   return createHmac('sha256', ADMIN_SESSION_SECRET).update(encodedPayload).digest('base64url');
 }
 
+function signRetryPaymentPayload(encodedPayload) {
+  return createHmac('sha256', ADMIN_SESSION_SECRET).update(`retry-payment:${encodedPayload}`).digest('base64url');
+}
+
 function buildAdminSessionToken() {
   const payload = {
     username: ADMIN_USERNAME,
@@ -1182,6 +1393,22 @@ function buildAdminSessionToken() {
   const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const signature = signSessionPayload(encodedPayload);
   return `${encodedPayload}.${signature}`;
+}
+
+function buildRetryPaymentToken(registrationId) {
+  const exp = Math.floor(Date.now() / 1000) + RETRY_PAYMENT_LINK_TTL_SECONDS;
+  const payload = {
+    purpose: 'retry_payment',
+    registrationId: String(registrationId || '').trim(),
+    exp,
+    nonce: randomUUID()
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = signRetryPaymentPayload(encodedPayload);
+  return {
+    token: `${encodedPayload}.${signature}`,
+    expiresAt: new Date(exp * 1000).toISOString()
+  };
 }
 
 function safeEqualStrings(left, right) {
@@ -1208,6 +1435,64 @@ function verifyAdminSessionToken(token) {
     return true;
   } catch {
     return false;
+  }
+}
+
+function verifyRetryPaymentToken(token) {
+  if (typeof token !== 'string' || !token.includes('.')) return null;
+
+  const [encodedPayload, signature, ...rest] = token.split('.');
+  if (!encodedPayload || !signature || rest.length > 0) return null;
+
+  const expected = signRetryPaymentPayload(encodedPayload);
+  if (!safeEqualStrings(signature, expected)) return null;
+
+  try {
+    const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+    if (payload.purpose !== 'retry_payment') return null;
+    if (typeof payload.registrationId !== 'string' || payload.registrationId.trim().length === 0) return null;
+    if (typeof payload.exp !== 'number') return null;
+    if (payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function verifyStripeWebhookSignature(rawBodyBuffer, stripeSignatureHeader) {
+  if (!STRIPE_WEBHOOK_SECRET) {
+    throw createError(503, 'Stripe webhook secret is not configured.');
+  }
+
+  const header = String(stripeSignatureHeader || '').trim();
+  if (!header) {
+    throw createError(400, 'Missing Stripe-Signature header.');
+  }
+
+  const parts = header.split(',').map((part) => part.trim()).filter(Boolean);
+  const timestampPart = parts.find((part) => part.startsWith('t='));
+  const v1Parts = parts.filter((part) => part.startsWith('v1='));
+
+  if (!timestampPart || v1Parts.length === 0) {
+    throw createError(400, 'Invalid Stripe-Signature header format.');
+  }
+
+  const timestamp = Number(timestampPart.slice(2));
+  if (!Number.isFinite(timestamp)) {
+    throw createError(400, 'Invalid Stripe webhook signature timestamp.');
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - timestamp) > STRIPE_WEBHOOK_TOLERANCE_SECONDS) {
+    throw createError(400, 'Stripe webhook signature timestamp is outside tolerance.');
+  }
+
+  const signedPayload = `${timestamp}.${rawBodyBuffer.toString('utf8')}`;
+  const expectedSignature = createHmac('sha256', STRIPE_WEBHOOK_SECRET).update(signedPayload).digest('hex');
+  const anyMatch = v1Parts.some((part) => safeEqualStrings(part.slice(3), expectedSignature));
+
+  if (!anyMatch) {
+    throw createError(400, 'Stripe webhook signature verification failed.');
   }
 }
 
@@ -1346,6 +1631,34 @@ function createServer(options = {}) {
         currency: 'EUR'
       });
       return;
+    }
+
+    if (req.method === 'GET' && pathname === '/retry-payment') {
+      const token = String(reqUrl.searchParams.get('token') || '').trim();
+      const payload = verifyRetryPaymentToken(token);
+      if (!payload) {
+        sendHtml(res, 400, buildRetryPaymentPage({
+          title: 'Invalid Payment Link',
+          message: 'This retry payment link is invalid or expired. Please request a new link from the organizer.'
+        }));
+        return;
+      }
+
+      try {
+        const result = await createCheckoutSessionForRegistration(db, payload.registrationId, { source: 'retry_link' });
+        res.writeHead(302, { Location: result.session.url });
+        res.end();
+        return;
+      } catch (error) {
+        const registration = getRegistrationById(db, payload.registrationId);
+        const status = Number(error.statusCode) || 400;
+        sendHtml(res, status, buildRetryPaymentPage({
+          title: 'Retry Payment Unavailable',
+          message: error.message || 'Could not restart payment. Please request a new payment link from the organizer.',
+          registration
+        }));
+        return;
+      }
     }
 
     if (req.method === 'GET' && pathname === '/admin') {
@@ -1501,6 +1814,53 @@ function createServer(options = {}) {
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/api/admin/registrations/retry-link') {
+      if (!isAdminAuthenticated(req)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+      if (!isStripeEnabled()) {
+        sendJson(res, 503, { error: 'Stripe is not configured. Set STRIPE_SECRET_KEY first.' });
+        return;
+      }
+
+      try {
+        const body = await parseJsonBody(req);
+        const registrationId = String(body.registrationId || '').trim();
+        if (!registrationId) {
+          sendJson(res, 400, { error: 'registrationId is required.' });
+          return;
+        }
+
+        const registration = getRegistrationById(db, registrationId);
+        if (!registration) {
+          sendJson(res, 404, { error: 'Registration not found.' });
+          return;
+        }
+
+        if (registration.status === 'PAID') {
+          sendJson(res, 400, { error: 'Registration is already paid.' });
+          return;
+        }
+
+        if (registration.status === 'DELETED' || registration.status === 'ANONYMIZED') {
+          sendJson(res, 400, { error: `Cannot create retry link for status: ${registration.status}.` });
+          return;
+        }
+
+        const retry = buildRetryPaymentToken(registration.id);
+        const url = `${APP_BASE_URL}/retry-payment?token=${encodeURIComponent(retry.token)}`;
+        sendJson(res, 200, {
+          registrationId: registration.id,
+          url,
+          expiresAt: retry.expiresAt
+        });
+      } catch (error) {
+        sendJson(res, 400, { error: error.message || 'Invalid request' });
+      }
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/admin/registrations/anonymize') {
       if (!isAdminAuthenticated(req)) {
         sendJson(res, 401, { error: 'Admin login required.' });
@@ -1572,8 +1932,20 @@ function createServer(options = {}) {
           console.error(`Email send failed for ${newRegistration.id}: ${error.message}`);
         });
 
+        let checkoutSession = null;
+        let paymentError = null;
+        try {
+          const checkoutResult = await createCheckoutSessionForRegistration(db, newRegistration.id, { source: 'registration_submit' });
+          checkoutSession = checkoutResult.session;
+        } catch (error) {
+          paymentError = error;
+          console.error(`Stripe session creation failed for ${newRegistration.id}: ${error.message}`);
+        }
+
         sendJson(res, 201, {
-          message: 'Registration saved. Next step: redirect to Stripe Checkout.',
+          message: checkoutSession
+            ? 'Registration saved. Redirect to Stripe Checkout.'
+            : 'Registration saved, but payment session could not be created. Please try payment again.',
           registrationId: newRegistration.id,
           pricing,
           email: {
@@ -1586,9 +1958,10 @@ function createServer(options = {}) {
           },
           payment: {
             provider: 'stripe',
-            status: 'NOT_IMPLEMENTED',
-            note: 'Redirect to Stripe page is not enabled in demo mode yet.',
-            nextAction: 'REDIRECT_TO_STRIPE_CHECKOUT'
+            status: checkoutSession ? 'CHECKOUT_READY' : 'CHECKOUT_FAILED',
+            checkoutSessionId: checkoutSession?.id || null,
+            checkoutUrl: checkoutSession?.url || null,
+            error: paymentError ? paymentError.message : null
           }
         });
       } catch (error) {
@@ -1602,10 +1975,44 @@ function createServer(options = {}) {
     }
 
     if (req.method === 'POST' && pathname === '/api/payments/create-checkout-session') {
-      sendJson(res, 501, {
-        error: 'Stripe integration disabled in demo mode.',
-        nextStep: 'Integrate Stripe Checkout and call this endpoint from /api/register flow.'
-      });
+      try {
+        const body = await parseJsonBody(req);
+        const providedRegistrationId = String(body?.registrationId || '').trim();
+        const retryToken = String(body?.retryToken || '').trim();
+
+        let registrationId = providedRegistrationId;
+        const retryPayload = retryToken ? verifyRetryPaymentToken(retryToken) : null;
+
+        if (retryToken && !retryPayload) {
+          sendJson(res, 400, { error: 'Invalid or expired retry token.' });
+          return;
+        }
+
+        if (retryPayload) {
+          registrationId = retryPayload.registrationId;
+        } else if (!isAdminAuthenticated(req)) {
+          sendJson(res, 401, { error: 'Admin login required.' });
+          return;
+        }
+
+        if (!registrationId) {
+          sendJson(res, 400, { error: 'registrationId is required.' });
+          return;
+        }
+
+        const result = await createCheckoutSessionForRegistration(db, registrationId, {
+          source: retryPayload ? 'retry_token' : 'admin_manual'
+        });
+
+        sendJson(res, 200, {
+          registrationId: result.registration.id,
+          checkoutSessionId: result.session.id,
+          checkoutUrl: result.session.url
+        });
+      } catch (error) {
+        const statusCode = Number(error.statusCode) || 400;
+        sendJson(res, statusCode, { error: error.message || 'Could not create checkout session.' });
+      }
       return;
     }
 
@@ -1618,10 +2025,36 @@ function createServer(options = {}) {
     }
 
     if (req.method === 'POST' && pathname === '/api/stripe/webhook') {
-      sendJson(res, 501, {
-        error: 'Stripe webhook disabled in demo mode.',
-        nextStep: 'Validate signature and update payment status + invoice creation.'
-      });
+      try {
+        const rawBody = await parseRawBody(req);
+        verifyStripeWebhookSignature(rawBody, req.headers['stripe-signature']);
+
+        let event;
+        try {
+          event = JSON.parse(rawBody.toString('utf8'));
+        } catch {
+          sendJson(res, 400, { error: 'Invalid Stripe webhook payload JSON.' });
+          return;
+        }
+
+        const eventType = String(event?.type || '');
+        const session = event?.data?.object || {};
+        const metadataRegistrationId = String(session?.metadata?.registration_id || '').trim();
+        const clientReferenceId = String(session?.client_reference_id || '').trim();
+        const registrationId = metadataRegistrationId || clientReferenceId;
+
+        if (
+          (eventType === 'checkout.session.completed' || eventType === 'checkout.session.async_payment_succeeded') &&
+          registrationId
+        ) {
+          await runWithSqliteRetry(() => updateRegistrationStatus(db, registrationId, 'PAID'));
+        }
+
+        sendJson(res, 200, { received: true });
+      } catch (error) {
+        const statusCode = Number(error.statusCode) || 400;
+        sendJson(res, statusCode, { error: error.message || 'Webhook processing failed.' });
+      }
       return;
     }
 
