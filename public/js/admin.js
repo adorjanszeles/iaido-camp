@@ -23,9 +23,13 @@
   const emailBodyEl = document.getElementById('email-body');
   const emailSendMessageEl = document.getElementById('email-send-message');
   const sendEmailBtn = document.getElementById('send-email-btn');
+  const invoiceRowsEl = document.getElementById('invoice-rows');
+  const invoiceSearchEl = document.getElementById('invoice-search');
+  const invoiceSearchMetaEl = document.getElementById('invoice-search-meta');
   const registrationSearchEl = document.getElementById('registration-search');
   const registrationSearchMetaEl = document.getElementById('registration-search-meta');
   let allRegistrations = [];
+  let allInvoices = [];
   let emailTemplates = [];
   let emailCapabilities = {
     provider: 'disabled',
@@ -93,6 +97,16 @@
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return String(value);
     return date.toLocaleString('en-GB');
+  }
+
+  function renderInvoiceXmlBlock(label, value) {
+    const safeValue = String(value || '').trim();
+    return `
+      <div style="margin-top:0.6rem;">
+        <div class="registration-detail-label">${escapeHtml(label)}</div>
+        <pre style="white-space: pre-wrap; margin: 0.3rem 0 0; font-size: 0.8rem; line-height: 1.35; max-height: 260px; overflow: auto;">${escapeHtml(safeValue || '-')}</pre>
+      </div>
+    `;
   }
 
   function boolToYesNo(value) {
@@ -210,6 +224,103 @@
         `;
       })
       .join('');
+  }
+
+  function updateInvoiceSearchMeta(visibleCount, totalCount, query) {
+    if (!invoiceSearchMetaEl) return;
+    if (!query) {
+      invoiceSearchMetaEl.textContent = `Showing ${totalCount} invoice records.`;
+      return;
+    }
+
+    invoiceSearchMetaEl.textContent = `Showing ${visibleCount} of ${totalCount} invoice records for "${query}".`;
+  }
+
+  function renderInvoiceRows(invoices, options = {}) {
+    if (!invoiceRowsEl) return;
+    const hasFilter = Boolean(options.hasFilter);
+
+    if (!invoices.length) {
+      invoiceRowsEl.innerHTML = hasFilter
+        ? '<tr><td colspan="7">No matching invoice records.</td></tr>'
+        : '<tr><td colspan="7">No invoice records yet.</td></tr>';
+      return;
+    }
+
+    invoiceRowsEl.innerHTML = invoices
+      .slice()
+      .map((item) => {
+        const invoiceId = String(item.id || '');
+        const status = String(item.status || '-');
+        const registrationId = String(item.registrationId || '');
+        const person = String(item.registrationFullName || '').trim();
+        const email = String(item.registrationEmail || '').trim();
+        const identity = person || email ? `${escapeHtml(person)}<br /><span class="helper">${escapeHtml(email)}</span>` : '-';
+        const errorText = String(item.errorMessage || item.errorCode || '').trim();
+        const detailsToggle = `<button class="btn secondary btn-small js-toggle-invoice-details" data-invoice-id="${invoiceId}" aria-expanded="false" type="button">Show response</button>`;
+
+        const detailRow = `
+          <tr class="invoice-details-row" data-invoice-details-row="${invoiceId}" hidden>
+            <td colspan="7">
+              <div class="registration-details-grid">
+                ${renderDetailField('Record ID', item.id)}
+                ${renderDetailField('Registration ID', item.registrationId)}
+                ${renderDetailField('Invoice number', item.invoiceNumber)}
+                ${renderDetailField('Status', status)}
+                ${renderDetailField('Provider', item.provider)}
+                ${renderDetailField('Trigger source', item.triggerSource)}
+                ${renderDetailField('External ID', item.externalId)}
+                ${renderDetailField('Gross amount', formatCurrency(Number(item.grossAmount || 0), item.currency || 'EUR'))}
+                ${renderDetailField('Net amount', formatCurrency(Number(item.netAmount || 0), item.currency || 'EUR'))}
+                ${renderDetailField('Error code', item.errorCode || '-')}
+                ${renderDetailField('Error message', errorText || '-')}
+                ${renderDetailField('Created at', formatDateTime(item.createdAt))}
+                ${renderDetailField('Updated at', formatDateTime(item.updatedAt))}
+              </div>
+              ${renderInvoiceXmlBlock('Request XML', item.requestXml)}
+              ${renderInvoiceXmlBlock('Raw response', item.rawResponse)}
+            </td>
+          </tr>
+        `;
+
+        return `
+          <tr>
+            <td>${formatDateTime(item.updatedAt)}</td>
+            <td>${escapeHtml(registrationId)}<br />${identity}</td>
+            <td>${escapeHtml(item.invoiceNumber || '-')}</td>
+            <td>${escapeHtml(status)}</td>
+            <td>${escapeHtml(item.triggerSource || '-')}</td>
+            <td>${escapeHtml(errorText || '-')}</td>
+            <td>${detailsToggle}</td>
+          </tr>
+          ${detailRow}
+        `;
+      })
+      .join('');
+  }
+
+  function filterInvoices() {
+    const query = String(invoiceSearchEl?.value || '').trim();
+    const normalized = query.toLowerCase();
+
+    const filtered = !normalized
+      ? allInvoices
+      : allInvoices.filter((item) => {
+        const fields = [
+          item.registrationId,
+          item.registrationFullName,
+          item.registrationEmail,
+          item.invoiceNumber,
+          item.status,
+          item.triggerSource,
+          item.errorCode,
+          item.errorMessage
+        ];
+        return fields.some((value) => String(value || '').toLowerCase().includes(normalized));
+      });
+
+    renderInvoiceRows(filtered, { hasFilter: normalized.length > 0 });
+    updateInvoiceSearchMeta(filtered.length, allInvoices.length, query);
   }
 
   function updateSearchMeta(visibleCount, totalCount, query) {
@@ -446,14 +557,21 @@
 
   async function loadData() {
     try {
-      const [statsRes, regsRes, pricingRes, emailTemplateRes] = await Promise.all([
+      const [statsRes, regsRes, pricingRes, emailTemplateRes, invoicesRes] = await Promise.all([
         fetch('/api/stats'),
         fetch('/api/registrations'),
         fetch('/api/admin/pricing'),
-        fetch('/api/admin/email/templates')
+        fetch('/api/admin/email/templates'),
+        fetch('/api/admin/invoices?limit=500')
       ]);
 
-      if (statsRes.status === 401 || regsRes.status === 401 || pricingRes.status === 401 || emailTemplateRes.status === 401) {
+      if (
+        statsRes.status === 401 ||
+        regsRes.status === 401 ||
+        pricingRes.status === 401 ||
+        emailTemplateRes.status === 401 ||
+        invoicesRes.status === 401
+      ) {
         window.location.href = '/admin';
         return;
       }
@@ -462,8 +580,9 @@
       const regsData = await regsRes.json();
       const pricingData = await pricingRes.json();
       const emailTemplateData = await emailTemplateRes.json();
+      const invoicesData = await invoicesRes.json();
 
-      if (!statsRes.ok || !regsRes.ok || !pricingRes.ok || !emailTemplateRes.ok) {
+      if (!statsRes.ok || !regsRes.ok || !pricingRes.ok || !emailTemplateRes.ok || !invoicesRes.ok) {
         throw new Error('API error while loading admin data.');
       }
 
@@ -482,6 +601,8 @@
       populateEmailTemplates(emailTemplates);
       renderEmailRecipientRows();
       setEmailSelectionControlsState();
+      allInvoices = Array.isArray(invoicesData.invoices) ? invoicesData.invoices : [];
+      filterInvoices();
 
       if (emailCapabilities.provider !== 'brevo') {
         showEmailMessage('error', 'Email provider is not configured. Set Brevo env values first.');
@@ -495,10 +616,15 @@
       statsEl.innerHTML = `<div class="notice error">${error.message}</div>`;
       rowsEl.innerHTML = '<tr><td colspan="7">Failed to load data.</td></tr>';
       allRegistrations = [];
+      allInvoices = [];
       updateSearchMeta(0, 0, '');
+      updateInvoiceSearchMeta(0, 0, '');
       showPricingMessage('error', 'Failed to load pricing settings.');
       if (emailRecipientRowsEl) {
         emailRecipientRowsEl.innerHTML = '<tr><td colspan="4">Failed to load recipients.</td></tr>';
+      }
+      if (invoiceRowsEl) {
+        invoiceRowsEl.innerHTML = '<tr><td colspan="7">Failed to load invoice records.</td></tr>';
       }
       showEmailMessage('error', 'Failed to load email sender data.');
     }
@@ -865,6 +991,10 @@
     registrationSearchEl.addEventListener('input', filterRegistrations);
   }
 
+  if (invoiceSearchEl) {
+    invoiceSearchEl.addEventListener('input', filterInvoices);
+  }
+
   if (emailRecipientModeEl) {
     emailRecipientModeEl.addEventListener('change', () => {
       setEmailSelectionControlsState();
@@ -952,6 +1082,24 @@
       anonymize(registrationId);
     }
   });
+
+  if (invoiceRowsEl) {
+    invoiceRowsEl.addEventListener('click', (event) => {
+      const toggleButton = event.target.closest('.js-toggle-invoice-details');
+      if (!toggleButton) return;
+
+      const invoiceId = toggleButton.getAttribute('data-invoice-id');
+      if (!invoiceId) return;
+
+      const detailsRow = invoiceRowsEl.querySelector(`tr[data-invoice-details-row="${invoiceId}"]`);
+      if (!detailsRow) return;
+
+      const isOpen = !detailsRow.hidden;
+      detailsRow.hidden = isOpen;
+      toggleButton.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
+      toggleButton.textContent = isOpen ? 'Show response' : 'Hide response';
+    });
+  }
 
   loadData();
 })();

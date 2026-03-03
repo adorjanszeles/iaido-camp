@@ -172,6 +172,38 @@
           </details>
 
           <details class="card faq-item admin-accordion-item">
+            <summary>Invoice log (Szamlazz.hu)</summary>
+            <div class="accordion-content">
+              <p class="subtitle">View sent invoice requests and Szamlazz.hu responses for troubleshooting.</p>
+
+              <div class="form-grid" style="margin: 0 0 0.8rem;">
+                <div class="field full">
+                  <label for="invoice-search">Filter by registration ID, name, email, invoice number or status</label>
+                  <input id="invoice-search" type="search" placeholder="Type to filter invoice log..." autocomplete="off" />
+                  <p id="invoice-search-meta" class="helper">Showing 0 invoice records.</p>
+                </div>
+              </div>
+
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Updated</th>
+                      <th>Registration</th>
+                      <th>Invoice #</th>
+                      <th>Status</th>
+                      <th>Trigger</th>
+                      <th>Error</th>
+                      <th>Details</th>
+                    </tr>
+                  </thead>
+                  <tbody id="invoice-rows"></tbody>
+                </table>
+              </div>
+            </div>
+          </details>
+
+          <details class="card faq-item admin-accordion-item">
             <summary>Registrations</summary>
             <div class="accordion-content">
               <div class="form-grid" style="margin: 0 0 0.8rem;">

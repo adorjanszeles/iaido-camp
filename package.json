@@ -1,8 +1,8 @@
 {
-  "name": "iaido-sensei-camp-demo",
+  "name": "iaido-sensei-camp",
   "version": "0.1.0",
   "private": true,
-  "description": "Temporary summer iaido camp website demo with registration flow and integration stubs",
+  "description": "Ishido Sensei Summer Seminar website with registration, payment, invoicing and admin tools",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js"

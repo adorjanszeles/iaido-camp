@@ -5,6 +5,8 @@ const { randomUUID, randomBytes, createHmac, timingSafeEqual, scryptSync } = req
 const { DatabaseSync } = require('node:sqlite');
 
 const PORT = process.env.PORT || 3000;
+const NODE_ENV = String(process.env.NODE_ENV || 'development').trim().toLowerCase();
+const IS_PRODUCTION = NODE_ENV === 'production';
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'camp.db');
 const DB_BACKUP_DIR = (() => {
@@ -40,6 +42,23 @@ const ADMIN_SESSION_COOKIE = 'admin_session';
 const ADMIN_PASSWORD_MIN_LENGTH = 8;
 const ADMIN_LOGIN_MAX_FAILURES = 5;
 const ADMIN_LOGIN_BLOCK_MS = 15 * 60 * 1000;
+const TRUST_PROXY = String(process.env.TRUST_PROXY || 'false').trim().toLowerCase() === 'true';
+const REGISTRATION_RATE_LIMIT_COUNT = (() => {
+  const raw = Number(process.env.REGISTRATION_RATE_LIMIT_COUNT || 30);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 30;
+})();
+const REGISTRATION_RATE_LIMIT_WINDOW_MS = (() => {
+  const raw = Number(process.env.REGISTRATION_RATE_LIMIT_WINDOW_MS || 10 * 60 * 1000);
+  return Number.isFinite(raw) && raw >= 1000 ? Math.floor(raw) : 10 * 60 * 1000;
+})();
+const ADMIN_EMAIL_RATE_LIMIT_COUNT = (() => {
+  const raw = Number(process.env.ADMIN_EMAIL_RATE_LIMIT_COUNT || 20);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 20;
+})();
+const ADMIN_EMAIL_RATE_LIMIT_WINDOW_MS = (() => {
+  const raw = Number(process.env.ADMIN_EMAIL_RATE_LIMIT_WINDOW_MS || 10 * 60 * 1000);
+  return Number.isFinite(raw) && raw >= 1000 ? Math.floor(raw) : 10 * 60 * 1000;
+})();
 const RETRY_PAYMENT_LINK_TTL_SECONDS = (() => {
   const raw = Number(process.env.RETRY_PAYMENT_LINK_TTL_SECONDS || 60 * 60 * 24 * 7);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 60 * 60 * 24 * 7;
@@ -116,6 +135,21 @@ const STRIPE_REQUEST_TIMEOUT_MS = 10000;
 const STRIPE_WEBHOOK_TOLERANCE_SECONDS = 300;
 const STRIPE_SUCCESS_URL = String(process.env.STRIPE_SUCCESS_URL || `${APP_BASE_URL}/payment-success`).trim();
 const STRIPE_CANCEL_URL = String(process.env.STRIPE_CANCEL_URL || `${APP_BASE_URL}/payment-cancel`).trim();
+const SZAMLAZZ_ENABLED = String(process.env.SZAMLAZZ_ENABLED || 'false').trim().toLowerCase() === 'true';
+const SZAMLAZZ_API_URL = String(process.env.SZAMLAZZ_API_URL || 'https://www.szamlazz.hu/szamla/').trim();
+const SZAMLAZZ_AGENT_KEY = String(process.env.SZAMLAZZ_AGENT_KEY || '').trim();
+const SZAMLAZZ_REQUEST_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.SZAMLAZZ_REQUEST_TIMEOUT_MS || 15000);
+  return Number.isFinite(raw) && raw >= 1000 ? Math.floor(raw) : 15000;
+})();
+const SZAMLAZZ_INVOICE_LANGUAGE = String(process.env.SZAMLAZZ_INVOICE_LANGUAGE || 'en').trim() || 'en';
+const SZAMLAZZ_PAYMENT_METHOD = String(process.env.SZAMLAZZ_PAYMENT_METHOD || 'Bankkártya').trim() || 'Bankkártya';
+const SZAMLAZZ_AFAKULCS = String(process.env.SZAMLAZZ_AFAKULCS || '0').trim() || '0';
+const SZAMLAZZ_ESZAMLA = String(process.env.SZAMLAZZ_ESZAMLA || 'false').trim().toLowerCase() === 'true';
+const SZAMLAZZ_SEND_EMAIL = String(process.env.SZAMLAZZ_SEND_EMAIL || 'false').trim().toLowerCase() === 'true';
+const SZAMLAZZ_SET_PAID = String(process.env.SZAMLAZZ_SET_PAID || 'true').trim().toLowerCase() !== 'false';
+const SZAMLAZZ_COMMENT = String(process.env.SZAMLAZZ_COMMENT || 'Ishido Sensei - Summer Seminar 2026').trim();
+const SZAMLAZZ_EXTERNAL_ID_PREFIX = String(process.env.SZAMLAZZ_EXTERNAL_ID_PREFIX || 'camp-').trim();
 const PRICE_CATALOG = {
   campType: {
     iaido: { label: 'Iaido seminar', defaultAmount: 149 },
@@ -134,6 +168,7 @@ const PRICE_CATALOG = {
   }
 };
 const adminLoginFailures = new Map();
+const rateLimitBuckets = new Map();
 
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -324,6 +359,10 @@ function ensureAdminAuth(db) {
   const existing = readAdminAuth(db);
   if (existing) {
     return existing;
+  }
+
+  if (IS_PRODUCTION && !isValidAdminPassword(ADMIN_PASSWORD)) {
+    throw new Error('ADMIN_PASSWORD must be a strong password in production (min 8 chars, letters and numbers).');
   }
 
   const initial = createPasswordHash(ADMIN_PASSWORD);
@@ -661,6 +700,422 @@ function insertAdminEmailLog(db, logEntry) {
   );
 }
 
+function isSzamlazzEnabled() {
+  return SZAMLAZZ_ENABLED && SZAMLAZZ_AGENT_KEY.length > 0;
+}
+
+function toBooleanXml(value) {
+  return value ? 'true' : 'false';
+}
+
+function escapeXml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function roundMoney(value) {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount)) return 0;
+  return Math.round(amount * 100) / 100;
+}
+
+function formatMoneyXml(value) {
+  return roundMoney(value).toFixed(2);
+}
+
+function getTodayDateString() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function buildSzamlazzExternalId(registrationId) {
+  const safeId = String(registrationId || '').trim();
+  return `${SZAMLAZZ_EXTERNAL_ID_PREFIX}${safeId}`;
+}
+
+function calculateVatBreakdown(grossAmount, vatKey) {
+  const gross = roundMoney(grossAmount);
+  const rate = Number(String(vatKey || '').replace(',', '.'));
+  if (Number.isFinite(rate) && rate > 0) {
+    const net = roundMoney(gross / (1 + rate / 100));
+    const vat = roundMoney(gross - net);
+    return { net, vat, gross };
+  }
+
+  return { net: gross, vat: 0, gross };
+}
+
+function getRegistrationPackageLabel(registration) {
+  const key = String(registration?.campType || '').trim();
+  const base = PRICE_CATALOG.campType?.[key]?.label || 'Seminar package';
+  return base;
+}
+
+function buildSzamlazzInvoiceXml(registration, options = {}) {
+  const externalId = String(options.externalId || buildSzamlazzExternalId(registration.id)).trim();
+  const invoiceDate = String(options.invoiceDate || getTodayDateString()).trim() || getTodayDateString();
+  const dueDate = String(options.dueDate || invoiceDate).trim() || invoiceDate;
+  const amount = Number(registration.amount ?? registration.amountHuf ?? 0);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw createError(400, 'Invalid registration amount for invoice creation.');
+  }
+
+  const vatKey = String(options.vatKey || SZAMLAZZ_AFAKULCS).trim() || '0';
+  const breakdown = calculateVatBreakdown(amount, vatKey);
+  const description = String(options.description || getRegistrationPackageLabel(registration)).trim();
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<xmlszamla xmlns="http://www.szamlazz.hu/xmlszamla" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.szamlazz.hu/xmlszamla https://www.szamlazz.hu/szamla/docs/xsds/agent/xmlszamla.xsd">
+  <beallitasok>
+    <szamlaagentkulcs>${escapeXml(SZAMLAZZ_AGENT_KEY)}</szamlaagentkulcs>
+    <eszamla>${toBooleanXml(SZAMLAZZ_ESZAMLA)}</eszamla>
+    <szamlaLetoltes>false</szamlaLetoltes>
+    <valaszVerzio>2</valaszVerzio>
+    <szamlaKulsoAzon>${escapeXml(externalId)}</szamlaKulsoAzon>
+  </beallitasok>
+  <fejlec>
+    <keltDatum>${escapeXml(invoiceDate)}</keltDatum>
+    <teljesitesDatum>${escapeXml(invoiceDate)}</teljesitesDatum>
+    <fizetesiHataridoDatum>${escapeXml(dueDate)}</fizetesiHataridoDatum>
+    <fizmod>${escapeXml(SZAMLAZZ_PAYMENT_METHOD)}</fizmod>
+    <penznem>${escapeXml(String(registration.currency || 'EUR').toUpperCase())}</penznem>
+    <szamlaNyelve>${escapeXml(SZAMLAZZ_INVOICE_LANGUAGE)}</szamlaNyelve>
+    <megjegyzes>${escapeXml(SZAMLAZZ_COMMENT)}</megjegyzes>
+    <rendelesSzam>${escapeXml(registration.id)}</rendelesSzam>
+    <fizetve>${toBooleanXml(SZAMLAZZ_SET_PAID)}</fizetve>
+  </fejlec>
+  <elado />
+  <vevo>
+    <nev>${escapeXml(registration.billingFullName || registration.fullName || '')}</nev>
+    <irsz>${escapeXml(registration.billingZip || '')}</irsz>
+    <telepules>${escapeXml(registration.billingCity || '')}</telepules>
+    <cim>${escapeXml(registration.billingAddress || '')}</cim>
+    <orszag>${escapeXml(registration.billingCountry || '')}</orszag>
+    <email>${escapeXml(registration.email || '')}</email>
+    <sendEmail>${toBooleanXml(SZAMLAZZ_SEND_EMAIL)}</sendEmail>
+  </vevo>
+  <tetelek>
+    <tetel>
+      <megnevezes>${escapeXml(description)}</megnevezes>
+      <mennyiseg>1</mennyiseg>
+      <mennyisegiEgyseg>db</mennyisegiEgyseg>
+      <nettoEgysegar>${formatMoneyXml(breakdown.net)}</nettoEgysegar>
+      <afakulcs>${escapeXml(vatKey)}</afakulcs>
+      <nettoErtek>${formatMoneyXml(breakdown.net)}</nettoErtek>
+      <afaErtek>${formatMoneyXml(breakdown.vat)}</afaErtek>
+      <bruttoErtek>${formatMoneyXml(breakdown.gross)}</bruttoErtek>
+    </tetel>
+  </tetelek>
+</xmlszamla>`;
+}
+
+function decodeBasicXmlEntities(value) {
+  return String(value || '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+function extractXmlTag(xml, tagName) {
+  const safeTag = String(tagName || '').replace(/[^\w:-]/g, '');
+  if (!safeTag) return '';
+  const regex = new RegExp(`<${safeTag}>([\\s\\S]*?)<\\/${safeTag}>`, 'i');
+  const match = String(xml || '').match(regex);
+  if (!match) return '';
+  const raw = String(match[1] || '').trim();
+  const cdataMatch = raw.match(/^<!\[CDATA\[([\s\S]*?)\]\]>$/);
+  const normalized = cdataMatch ? cdataMatch[1] : raw;
+  return decodeBasicXmlEntities(normalized.trim());
+}
+
+function parseSzamlazzResponse(xmlText) {
+  const xml = String(xmlText || '').trim();
+  const successToken = extractXmlTag(xml, 'sikeres').toLowerCase();
+  const success = successToken === 'true' || successToken === '1';
+  return {
+    success,
+    invoiceNumber: extractXmlTag(xml, 'szamlaszam') || extractXmlTag(xml, 'szamlaSorszam'),
+    errorCode: extractXmlTag(xml, 'hibakod'),
+    errorMessage: extractXmlTag(xml, 'hibauzenet') || extractXmlTag(xml, 'uzenet'),
+    raw: xml
+  };
+}
+
+function upsertInvoiceRecord(db, payload) {
+  const upsert = db.prepare(`
+    INSERT INTO invoice_records (
+      id,
+      registration_id,
+      provider,
+      status,
+      trigger_source,
+      invoice_number,
+      external_id,
+      net_amount,
+      gross_amount,
+      currency,
+      request_xml,
+      raw_response,
+      error_code,
+      error_message,
+      created_at,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(registration_id) DO UPDATE SET
+      status = excluded.status,
+      trigger_source = excluded.trigger_source,
+      invoice_number = excluded.invoice_number,
+      external_id = excluded.external_id,
+      net_amount = excluded.net_amount,
+      gross_amount = excluded.gross_amount,
+      currency = excluded.currency,
+      request_xml = excluded.request_xml,
+      raw_response = excluded.raw_response,
+      error_code = excluded.error_code,
+      error_message = excluded.error_message,
+      updated_at = excluded.updated_at
+  `);
+
+  const now = new Date().toISOString();
+  upsert.run(
+    `inv_${randomUUID()}`,
+    String(payload.registrationId || '').trim(),
+    'szamlazz_hu',
+    String(payload.status || 'FAILED'),
+    String(payload.triggerSource || 'manual'),
+    String(payload.invoiceNumber || ''),
+    String(payload.externalId || ''),
+    roundMoney(payload.netAmount),
+    roundMoney(payload.grossAmount),
+    String(payload.currency || 'EUR'),
+    String(payload.requestXml || ''),
+    String(payload.rawResponse || ''),
+    String(payload.errorCode || ''),
+    String(payload.errorMessage || ''),
+    now,
+    now
+  );
+}
+
+function getInvoiceRecordByRegistrationId(db, registrationId) {
+  const row = db.prepare('SELECT * FROM invoice_records WHERE registration_id = ?').get(String(registrationId || '').trim());
+  if (!row) return null;
+  return {
+    id: row.id,
+    registrationId: row.registration_id,
+    provider: row.provider,
+    status: row.status,
+    triggerSource: row.trigger_source,
+    invoiceNumber: row.invoice_number || '',
+    externalId: row.external_id || '',
+    netAmount: Number(row.net_amount || 0),
+    grossAmount: Number(row.gross_amount || 0),
+    currency: row.currency || 'EUR',
+    requestXml: row.request_xml || '',
+    errorCode: row.error_code || '',
+    errorMessage: row.error_message || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function readInvoiceRecords(db, options = {}) {
+  const rawLimit = Number(options.limit || 200);
+  const limit = Number.isFinite(rawLimit) && rawLimit >= 1 ? Math.min(Math.floor(rawLimit), 1000) : 200;
+
+  const rows = db
+    .prepare(`
+      SELECT
+        i.*,
+        r.full_name AS registration_full_name,
+        r.email AS registration_email
+      FROM invoice_records i
+      LEFT JOIN registrations r ON r.id = i.registration_id
+      ORDER BY datetime(i.updated_at) DESC, i.rowid DESC
+      LIMIT ?
+    `)
+    .all(limit);
+
+  return rows.map((row) => ({
+    id: row.id,
+    registrationId: row.registration_id,
+    registrationFullName: row.registration_full_name || '',
+    registrationEmail: row.registration_email || '',
+    provider: row.provider,
+    status: row.status,
+    triggerSource: row.trigger_source,
+    invoiceNumber: row.invoice_number || '',
+    externalId: row.external_id || '',
+    netAmount: Number(row.net_amount || 0),
+    grossAmount: Number(row.gross_amount || 0),
+    currency: row.currency || 'EUR',
+    requestXml: row.request_xml || '',
+    rawResponse: row.raw_response || '',
+    errorCode: row.error_code || '',
+    errorMessage: row.error_message || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }));
+}
+
+async function sendSzamlazzInvoice(xml) {
+  const form = new FormData();
+  form.append(
+    'action-xmlagentxmlfile',
+    new Blob([String(xml || '')], { type: 'application/xml; charset=UTF-8' }),
+    'invoice.xml'
+  );
+
+  const response = await fetch(SZAMLAZZ_API_URL, {
+    method: 'POST',
+    body: form,
+    signal: AbortSignal.timeout(SZAMLAZZ_REQUEST_TIMEOUT_MS)
+  });
+
+  const raw = await response.text();
+  if (!response.ok) {
+    throw createError(502, `Szamlazz.hu request failed (${response.status}).`);
+  }
+
+  return raw;
+}
+
+async function createInvoiceForRegistration(db, registrationId, options = {}) {
+  if (!isSzamlazzEnabled()) {
+    throw createError(503, 'Szamlazz.hu integration is not configured.');
+  }
+
+  const registration = getRegistrationById(db, registrationId);
+  if (!registration) {
+    throw createError(404, 'Registration not found.');
+  }
+
+  if (registration.status !== 'PAID') {
+    throw createError(400, `Invoice can only be created for PAID registrations. Current status: ${registration.status}.`);
+  }
+
+  const existing = getInvoiceRecordByRegistrationId(db, registration.id);
+  if (existing && existing.status === 'SUCCESS' && existing.invoiceNumber) {
+    return {
+      created: false,
+      reused: true,
+      invoice: existing
+    };
+  }
+
+  const triggerSource = String(options.triggerSource || 'manual');
+  const externalId = String(existing?.externalId || buildSzamlazzExternalId(registration.id)).trim();
+  const invoiceXml = buildSzamlazzInvoiceXml(registration, {
+    externalId,
+    invoiceDate: options.invoiceDate,
+    dueDate: options.dueDate
+  });
+
+  try {
+    const rawResponse = await sendSzamlazzInvoice(invoiceXml);
+    const parsed = parseSzamlazzResponse(rawResponse);
+    if (!parsed.success) {
+      const message = parsed.errorMessage || 'Szamlazz.hu returned an unsuccessful response.';
+      await runWithSqliteRetry(() => upsertInvoiceRecord(db, {
+        registrationId: registration.id,
+        status: 'FAILED',
+        triggerSource,
+        invoiceNumber: parsed.invoiceNumber,
+        externalId,
+        netAmount: registration.amount,
+        grossAmount: registration.amount,
+        currency: registration.currency || 'EUR',
+        requestXml: invoiceXml,
+        rawResponse,
+        errorCode: parsed.errorCode,
+        errorMessage: message
+      }));
+      const error = createError(502, `Szamlazz.hu invoice creation failed: ${message}`);
+      error.alreadyStored = true;
+      throw error;
+    }
+
+    if (!parsed.invoiceNumber) {
+      await runWithSqliteRetry(() => upsertInvoiceRecord(db, {
+        registrationId: registration.id,
+        status: 'FAILED',
+        triggerSource,
+        invoiceNumber: '',
+        externalId,
+        netAmount: registration.amount,
+        grossAmount: registration.amount,
+        currency: registration.currency || 'EUR',
+        requestXml: invoiceXml,
+        rawResponse,
+        errorCode: parsed.errorCode || 'missing_invoice_number',
+        errorMessage: 'Missing invoice number in Szamlazz.hu response.'
+      }));
+      const error = createError(502, 'Szamlazz.hu did not return an invoice number.');
+      error.alreadyStored = true;
+      throw error;
+    }
+
+    const breakdown = calculateVatBreakdown(Number(registration.amount ?? registration.amountHuf ?? 0), SZAMLAZZ_AFAKULCS);
+    await runWithSqliteRetry(() => upsertInvoiceRecord(db, {
+      registrationId: registration.id,
+      status: 'SUCCESS',
+      triggerSource,
+      invoiceNumber: parsed.invoiceNumber,
+      externalId,
+      netAmount: breakdown.net,
+      grossAmount: breakdown.gross,
+      currency: registration.currency || 'EUR',
+      requestXml: invoiceXml,
+      rawResponse,
+      errorCode: '',
+      errorMessage: ''
+    }));
+
+    const stored = getInvoiceRecordByRegistrationId(db, registration.id);
+    return {
+      created: true,
+      reused: false,
+      invoice: stored
+    };
+  } catch (error) {
+    if (isSqliteBusyError(error)) {
+      throw createError(503, 'Database is currently busy. Please try again in a few seconds.');
+    }
+
+    if (!error?.alreadyStored) {
+      try {
+        await runWithSqliteRetry(() => upsertInvoiceRecord(db, {
+          registrationId: registration.id,
+          status: 'FAILED',
+          triggerSource,
+          invoiceNumber: '',
+          externalId,
+          netAmount: registration.amount,
+          grossAmount: registration.amount,
+          currency: registration.currency || 'EUR',
+          requestXml: invoiceXml,
+          rawResponse: '',
+          errorCode: '',
+          errorMessage: error.message || 'Unknown invoice error'
+        }));
+      } catch (storeError) {
+        console.error(`Invoice failure log write failed for ${registration.id}: ${storeError.message}`);
+      }
+    }
+
+    if (Number(error.statusCode)) {
+      throw error;
+    }
+
+    throw createError(502, `Szamlazz.hu invoice request failed: ${error.message || 'Unknown error'}`);
+  }
+}
+
 function buildRegistrationEmailContent(registration, pricing) {
   const participantName = escapeHtml(registration.fullName || '');
   const registrationId = escapeHtml(registration.id || '');
@@ -927,6 +1382,28 @@ function initDatabase() {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS invoice_records (
+      id TEXT PRIMARY KEY,
+      registration_id TEXT NOT NULL UNIQUE,
+      provider TEXT NOT NULL,
+      status TEXT NOT NULL,
+      trigger_source TEXT NOT NULL,
+      invoice_number TEXT,
+      external_id TEXT,
+      net_amount REAL,
+      gross_amount REAL,
+      currency TEXT NOT NULL,
+      request_xml TEXT NOT NULL DEFAULT '',
+      raw_response TEXT NOT NULL,
+      error_code TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_invoice_records_status ON invoice_records(status);
+    CREATE INDEX IF NOT EXISTS idx_invoice_records_registration ON invoice_records(registration_id);
+
     CREATE TABLE IF NOT EXISTS admin_email_logs (
       id TEXT PRIMARY KEY,
       created_at TEXT NOT NULL,
@@ -942,6 +1419,7 @@ function initDatabase() {
   `);
 
   ensureRegistrationColumns(db);
+  ensureInvoiceRecordColumns(db);
   migrateLegacyJsonIfNeeded(db);
   ensureAdminAuth(db);
   return db;
@@ -1014,6 +1492,15 @@ function ensureRegistrationColumns(db) {
       END
     WHERE COALESCE(current_grade_iaido, '') = ''
   `);
+}
+
+function ensureInvoiceRecordColumns(db) {
+  const columns = db.prepare('PRAGMA table_info(invoice_records)').all();
+  const columnNames = new Set(columns.map((column) => column.name));
+
+  if (!columnNames.has('request_xml')) {
+    db.exec("ALTER TABLE invoice_records ADD COLUMN request_xml TEXT NOT NULL DEFAULT '';");
+  }
 }
 
 function migrateLegacyJsonIfNeeded(db) {
@@ -1562,12 +2049,12 @@ function validateRegistration(data, pricingSettings = DEFAULT_PRICING_SETTINGS) 
 }
 
 function sendJson(res, statusCode, payload) {
-  res.writeHead(statusCode, { 'Content-Type': MIME_TYPES['.json'] });
+  res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(payload));
 }
 
 function sendHtml(res, statusCode, html) {
-  res.writeHead(statusCode, { 'Content-Type': MIME_TYPES['.html'] });
+  res.writeHead(statusCode, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(html);
 }
 
@@ -1721,7 +2208,11 @@ function parseCookies(req) {
   return header.split(';').reduce((acc, part) => {
     const [rawKey, ...valueParts] = part.trim().split('=');
     if (!rawKey) return acc;
-    acc[rawKey] = decodeURIComponent(valueParts.join('=') || '');
+    try {
+      acc[rawKey] = decodeURIComponent(valueParts.join('=') || '');
+    } catch {
+      acc[rawKey] = valueParts.join('=') || '';
+    }
     return acc;
   }, {});
 }
@@ -1749,7 +2240,7 @@ function setAdminSessionCookie(res, token, maxAgeSeconds) {
     'SameSite=Lax',
     `Max-Age=${maxAgeSeconds}`
   ];
-  if (process.env.NODE_ENV === 'production') {
+  if (IS_PRODUCTION) {
     parts.push('Secure');
   }
   addSetCookieHeader(res, parts.join('; '));
@@ -1763,7 +2254,7 @@ function clearAdminSessionCookie(res) {
     'SameSite=Lax',
     'Max-Age=0'
   ];
-  if (process.env.NODE_ENV === 'production') {
+  if (IS_PRODUCTION) {
     parts.push('Secure');
   }
   addSetCookieHeader(res, parts.join('; '));
@@ -1897,13 +2388,150 @@ function verifyStripeWebhookSignature(rawBodyBuffer, stripeSignatureHeader) {
   }
 }
 
+function getSecurityHeadersForRequest(pathname) {
+  const csp = [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self' data:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'"
+  ].join('; ');
+
+  const headers = {
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+    'Permissions-Policy': 'geolocation=(), microphone=(), camera=(), payment=()',
+    'Cross-Origin-Resource-Policy': 'same-origin',
+    'Content-Security-Policy': csp
+  };
+
+  if (
+    pathname === '/admin' ||
+    pathname.startsWith('/api/admin') ||
+    pathname.startsWith('/api/stats') ||
+    pathname.startsWith('/api/registrations')
+  ) {
+    headers['Cache-Control'] = 'no-store';
+  }
+
+  const isHttpsBaseUrl = String(APP_BASE_URL || '').toLowerCase().startsWith('https://');
+  if (IS_PRODUCTION && isHttpsBaseUrl) {
+    headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains; preload';
+  }
+
+  return headers;
+}
+
+function applySecurityHeaders(res, pathname) {
+  const headers = getSecurityHeadersForRequest(pathname);
+  for (const [key, value] of Object.entries(headers)) {
+    res.setHeader(key, value);
+  }
+}
+
+function getAllowedOrigins(host) {
+  const safeHost = String(host || '').trim();
+  const origins = new Set();
+  if (safeHost) {
+    origins.add(`http://${safeHost}`);
+    origins.add(`https://${safeHost}`);
+  }
+
+  try {
+    const appOrigin = new URL(APP_BASE_URL).origin;
+    origins.add(appOrigin);
+  } catch {
+    // Ignore invalid APP_BASE_URL during local development.
+  }
+
+  return origins;
+}
+
+function isSameOriginRequest(req, reqUrl) {
+  const originHeader = String(req.headers.origin || '').trim();
+  if (!originHeader) return true;
+  const allowed = getAllowedOrigins(reqUrl.host);
+  return allowed.has(originHeader);
+}
+
+function isStateChangingMethod(method) {
+  const normalized = String(method || '').toUpperCase();
+  return normalized !== 'GET' && normalized !== 'HEAD' && normalized !== 'OPTIONS';
+}
+
+function sanitizeClientAddress(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 'unknown';
+
+  const bracketed = raw.match(/^\[([^\]]+)\](?::\d+)?$/);
+  if (bracketed) {
+    return bracketed[1];
+  }
+
+  // Remove :port suffix only for IPv4-like values.
+  if (raw.includes('.') && /:\d+$/.test(raw)) {
+    return raw.replace(/:\d+$/, '');
+  }
+
+  return raw;
+}
+
 function getClientIp(req) {
   const forwardedFor = String(req.headers['x-forwarded-for'] || '').trim();
-  if (forwardedFor) {
+  if (TRUST_PROXY && forwardedFor) {
     const first = forwardedFor.split(',')[0].trim();
-    if (first) return first;
+    if (first) {
+      return sanitizeClientAddress(first);
+    }
   }
-  return String(req.socket?.remoteAddress || 'unknown');
+  return sanitizeClientAddress(req.socket?.remoteAddress || 'unknown');
+}
+
+function getRateLimitBucket(name) {
+  const key = String(name || 'default');
+  if (!rateLimitBuckets.has(key)) {
+    rateLimitBuckets.set(key, new Map());
+  }
+  return rateLimitBuckets.get(key);
+}
+
+function checkRateLimit({ bucketName, key, limit, windowMs }) {
+  const bucket = getRateLimitBucket(bucketName);
+  const now = Date.now();
+  const entryKey = String(key || 'unknown');
+  const current = bucket.get(entryKey);
+
+  if (!current || now - current.windowStart >= windowMs) {
+    bucket.set(entryKey, { count: 1, windowStart: now });
+  } else {
+    current.count += 1;
+    bucket.set(entryKey, current);
+  }
+
+  if (bucket.size > 5000) {
+    for (const [storedKey, value] of bucket.entries()) {
+      if (now - Number(value?.windowStart || 0) >= windowMs) {
+        bucket.delete(storedKey);
+      }
+    }
+  }
+
+  const updated = bucket.get(entryKey);
+  const remaining = Math.max(0, limit - Number(updated?.count || 0));
+  const retryAfterMs = Math.max(0, windowMs - (now - Number(updated?.windowStart || now)));
+  const allowed = Number(updated?.count || 0) <= limit;
+
+  return {
+    allowed,
+    remaining,
+    retryAfterSeconds: Math.max(1, Math.ceil(retryAfterMs / 1000))
+  };
 }
 
 function registerAdminLoginFailure(ip) {
@@ -2056,13 +2684,42 @@ function getStaticFilePath(urlPath) {
   return path.join(PUBLIC_DIR, relativePath);
 }
 
+function validateRuntimeConfigForProduction() {
+  if (!IS_PRODUCTION) {
+    return;
+  }
+
+  if (
+    !ADMIN_SESSION_SECRET ||
+    ADMIN_SESSION_SECRET === 'replace-this-secret-in-production' ||
+    ADMIN_SESSION_SECRET.length < 32
+  ) {
+    throw new Error('Invalid ADMIN_SESSION_SECRET for production. Use a long random secret (min 32 chars).');
+  }
+
+  if (!String(APP_BASE_URL || '').toLowerCase().startsWith('https://')) {
+    throw new Error('APP_BASE_URL must use https:// in production.');
+  }
+
+  if (STRIPE_SECRET_KEY && !STRIPE_WEBHOOK_SECRET) {
+    throw new Error('STRIPE_WEBHOOK_SECRET is required in production when Stripe is enabled.');
+  }
+}
+
 function createServer(options = {}) {
+  validateRuntimeConfigForProduction();
   const db = options.db || initDatabase();
   let pricingSettings = loadPricingSettings(db);
 
   return http.createServer(async (req, res) => {
     const reqUrl = new URL(req.url, `http://${req.headers.host}`);
     const { pathname } = reqUrl;
+    applySecurityHeaders(res, pathname);
+
+    if (isStateChangingMethod(req.method) && pathname !== '/api/stripe/webhook' && !isSameOriginRequest(req, reqUrl)) {
+      sendJson(res, 403, { error: 'Forbidden origin.' });
+      return;
+    }
 
     if (req.method === 'GET' && pathname === '/api/pricing') {
       sendJson(res, 200, {
@@ -2134,6 +2791,18 @@ function createServer(options = {}) {
       }
       if (!isBrevoEnabled()) {
         sendJson(res, 503, { error: 'Email sending is not configured. Set Brevo env values first.' });
+        return;
+      }
+
+      const adminEmailRateLimit = checkRateLimit({
+        bucketName: 'admin_email_send',
+        key: getClientIp(req),
+        limit: ADMIN_EMAIL_RATE_LIMIT_COUNT,
+        windowMs: ADMIN_EMAIL_RATE_LIMIT_WINDOW_MS
+      });
+      if (!adminEmailRateLimit.allowed) {
+        res.setHeader('Retry-After', String(adminEmailRateLimit.retryAfterSeconds));
+        sendJson(res, 429, { error: `Email send rate limit exceeded. Try again in ${adminEmailRateLimit.retryAfterSeconds} seconds.` });
         return;
       }
 
@@ -2426,6 +3095,19 @@ function createServer(options = {}) {
       return;
     }
 
+    if (req.method === 'GET' && pathname === '/api/admin/invoices') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      const limitParam = Number(reqUrl.searchParams.get('limit') || 200);
+      const limit = Number.isFinite(limitParam) && limitParam >= 1 ? Math.min(Math.floor(limitParam), 1000) : 200;
+      const invoices = readInvoiceRecords(db, { limit });
+      sendJson(res, 200, { invoices, limit });
+      return;
+    }
+
     if (req.method === 'GET' && pathname === '/api/admin/export.csv') {
       if (!isAdminAuthenticated(req, db)) {
         sendJson(res, 401, { error: 'Admin login required.' });
@@ -2580,6 +3262,18 @@ function createServer(options = {}) {
     }
 
     if (req.method === 'POST' && pathname === '/api/register') {
+      const registerRateLimit = checkRateLimit({
+        bucketName: 'registration_submit',
+        key: getClientIp(req),
+        limit: REGISTRATION_RATE_LIMIT_COUNT,
+        windowMs: REGISTRATION_RATE_LIMIT_WINDOW_MS
+      });
+      if (!registerRateLimit.allowed) {
+        res.setHeader('Retry-After', String(registerRateLimit.retryAfterSeconds));
+        sendJson(res, 429, { error: `Too many registration attempts. Try again in ${registerRateLimit.retryAfterSeconds} seconds.` });
+        return;
+      }
+
       try {
         const body = await parseJsonBody(req);
         const cleanBody = sanitizePayload(body, pricingSettings);
@@ -2647,7 +3341,7 @@ function createServer(options = {}) {
             status: checkoutSession ? 'CHECKOUT_READY' : 'CHECKOUT_FAILED',
             checkoutSessionId: checkoutSession?.id || null,
             checkoutUrl: checkoutSession?.url || null,
-            error: paymentError ? paymentError.message : null
+            error: paymentError ? 'Checkout session creation failed.' : null
           }
         });
       } catch (error) {
@@ -2703,10 +3397,33 @@ function createServer(options = {}) {
     }
 
     if (req.method === 'POST' && pathname === '/api/invoices/create') {
-      sendJson(res, 501, {
-        error: 'Szamlazz.hu integration is not configured on this server.',
-        nextStep: 'Trigger this endpoint after successful Stripe webhook processing.'
-      });
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      try {
+        const body = await parseJsonBody(req);
+        const registrationId = String(body?.registrationId || '').trim();
+        if (!registrationId) {
+          sendJson(res, 400, { error: 'registrationId is required.' });
+          return;
+        }
+
+        const result = await createInvoiceForRegistration(db, registrationId, {
+          triggerSource: 'admin_manual'
+        });
+
+        sendJson(res, result.created ? 201 : 200, {
+          message: result.created ? 'Invoice created successfully.' : 'Invoice already exists for this registration.',
+          invoice: result.invoice,
+          created: result.created,
+          reused: result.reused
+        });
+      } catch (error) {
+        const statusCode = Number(error.statusCode) || 400;
+        sendJson(res, statusCode, { error: error.message || 'Invoice creation failed.' });
+      }
       return;
     }
 
@@ -2734,6 +3451,13 @@ function createServer(options = {}) {
           registrationId
         ) {
           await runWithSqliteRetry(() => updateRegistrationStatus(db, registrationId, 'PAID'));
+          if (isSzamlazzEnabled()) {
+            try {
+              await createInvoiceForRegistration(db, registrationId, { triggerSource: 'stripe_webhook' });
+            } catch (invoiceError) {
+              console.error(`Invoice creation failed for ${registrationId}: ${invoiceError.message}`);
+            }
+          }
         }
 
         sendJson(res, 200, { received: true });
