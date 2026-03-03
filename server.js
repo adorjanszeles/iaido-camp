@@ -520,6 +520,65 @@ function createStripeFormBody(fields) {
   return body;
 }
 
+function addQueryParamsToUrl(baseUrl, queryParts) {
+  const value = String(baseUrl || '').trim();
+  if (!value) return value;
+  const parts = Array.isArray(queryParts) ? queryParts.filter(Boolean) : [];
+  if (parts.length === 0) return value;
+
+  const hashIndex = value.indexOf('#');
+  const beforeHash = hashIndex >= 0 ? value.slice(0, hashIndex) : value;
+  const hash = hashIndex >= 0 ? value.slice(hashIndex) : '';
+  const separator = beforeHash.includes('?') ? '&' : '?';
+  return `${beforeHash}${separator}${parts.join('&')}${hash}`;
+}
+
+function buildStripeSuccessUrl(baseUrl, registrationId) {
+  const raw = String(baseUrl || '').trim();
+  const extra = [];
+  if (!/(?:\?|&)session_id=/.test(raw)) {
+    extra.push('session_id={CHECKOUT_SESSION_ID}');
+  }
+  if (registrationId && !/(?:\?|&)registration_id=/.test(raw)) {
+    extra.push(`registration_id=${encodeURIComponent(String(registrationId))}`);
+  }
+  return addQueryParamsToUrl(raw, extra);
+}
+
+function getStripeStringId(value) {
+  if (typeof value === 'string') return value.trim();
+  if (value && typeof value === 'object' && typeof value.id === 'string') return String(value.id).trim();
+  return '';
+}
+
+function extractRegistrationIdFromStripeSession(session) {
+  const metadataRegistrationId = String(session?.metadata?.registration_id || '').trim();
+  const clientReferenceId = String(session?.client_reference_id || '').trim();
+  return metadataRegistrationId || clientReferenceId;
+}
+
+function extractStripeSessionIdentifiers(session) {
+  return {
+    checkoutSessionId: getStripeStringId(session?.id),
+    paymentIntentId: getStripeStringId(session?.payment_intent),
+    customerId: getStripeStringId(session?.customer)
+  };
+}
+
+function stripeUnixToIso(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '';
+  return new Date(numeric * 1000).toISOString();
+}
+
+function isStripeSessionPaid(session, eventType) {
+  const paymentStatus = String(session?.payment_status || '').trim().toLowerCase();
+  if (paymentStatus === 'paid') return true;
+
+  const normalizedEventType = String(eventType || '').trim();
+  return normalizedEventType === 'checkout.session.async_payment_succeeded';
+}
+
 function createError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = Number(statusCode) || 500;
@@ -534,7 +593,7 @@ async function createStripeCheckoutSession(registration, options = {}) {
   const currency = String(registration.currency || 'EUR').toLowerCase();
   const amountMinor = toStripeMinorUnits(registration.amount ?? registration.amountHuf ?? 0, registration.currency || 'EUR');
   const packageLabel = PRICE_CATALOG.campType?.[registration.campType]?.label || 'Seminar package';
-  const successUrl = String(options.successUrl || STRIPE_SUCCESS_URL).trim();
+  const successUrl = buildStripeSuccessUrl(String(options.successUrl || STRIPE_SUCCESS_URL).trim(), registration.id);
   const cancelUrl = String(options.cancelUrl || STRIPE_CANCEL_URL).trim();
 
   const formBody = createStripeFormBody({
@@ -585,6 +644,47 @@ async function createStripeCheckoutSession(registration, options = {}) {
     id: sessionId,
     url: checkoutUrl
   };
+}
+
+async function getStripeCheckoutSession(sessionId) {
+  if (!isStripeEnabled()) {
+    throw createError(503, 'Stripe is not configured. Missing STRIPE_SECRET_KEY.');
+  }
+
+  const safeSessionId = String(sessionId || '').trim();
+  if (!safeSessionId) {
+    throw createError(400, 'Stripe session ID is required.');
+  }
+
+  const response = await fetch(
+    `${STRIPE_API_BASE_URL}/checkout/sessions/${encodeURIComponent(safeSessionId)}?expand[]=payment_intent`,
+    {
+      method: 'GET',
+      headers: {
+        authorization: `Bearer ${STRIPE_SECRET_KEY}`
+      },
+      signal: AbortSignal.timeout(STRIPE_REQUEST_TIMEOUT_MS)
+    }
+  );
+
+  const raw = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    const stripeMessage = payload?.error?.message || raw || 'Stripe API request failed.';
+    throw createError(response.status >= 400 && response.status < 500 ? 400 : 502, `Stripe session query failed: ${stripeMessage}`);
+  }
+
+  if (!payload || payload.object !== 'checkout.session') {
+    throw createError(502, 'Stripe session query returned an unexpected payload.');
+  }
+
+  return payload;
 }
 
 function isBrevoEnabled() {
@@ -1411,6 +1511,12 @@ function initDatabase() {
       billing_country TEXT NOT NULL,
       food_notes TEXT,
       price_breakdown TEXT NOT NULL,
+      stripe_checkout_session_id TEXT NOT NULL DEFAULT '',
+      stripe_payment_intent_id TEXT NOT NULL DEFAULT '',
+      stripe_customer_id TEXT NOT NULL DEFAULT '',
+      stripe_last_event_type TEXT NOT NULL DEFAULT '',
+      stripe_last_event_at TEXT NOT NULL DEFAULT '',
+      paid_at TEXT NOT NULL DEFAULT '',
       privacy_consent INTEGER NOT NULL,
       terms_consent INTEGER NOT NULL,
       privacy_policy_version TEXT NOT NULL DEFAULT '',
@@ -1516,6 +1622,24 @@ function ensureRegistrationColumns(db) {
   }
   if (!columnNames.has('terms_consent_at')) {
     db.exec("ALTER TABLE registrations ADD COLUMN terms_consent_at TEXT NOT NULL DEFAULT '';");
+  }
+  if (!columnNames.has('stripe_checkout_session_id')) {
+    db.exec("ALTER TABLE registrations ADD COLUMN stripe_checkout_session_id TEXT NOT NULL DEFAULT '';");
+  }
+  if (!columnNames.has('stripe_payment_intent_id')) {
+    db.exec("ALTER TABLE registrations ADD COLUMN stripe_payment_intent_id TEXT NOT NULL DEFAULT '';");
+  }
+  if (!columnNames.has('stripe_customer_id')) {
+    db.exec("ALTER TABLE registrations ADD COLUMN stripe_customer_id TEXT NOT NULL DEFAULT '';");
+  }
+  if (!columnNames.has('stripe_last_event_type')) {
+    db.exec("ALTER TABLE registrations ADD COLUMN stripe_last_event_type TEXT NOT NULL DEFAULT '';");
+  }
+  if (!columnNames.has('stripe_last_event_at')) {
+    db.exec("ALTER TABLE registrations ADD COLUMN stripe_last_event_at TEXT NOT NULL DEFAULT '';");
+  }
+  if (!columnNames.has('paid_at')) {
+    db.exec("ALTER TABLE registrations ADD COLUMN paid_at TEXT NOT NULL DEFAULT '';");
   }
 
   db.exec(`
@@ -1693,6 +1817,12 @@ function mapRegistrationRow(row) {
     billingCountry: row.billing_country,
     foodNotes: row.food_notes || '',
     priceBreakdown,
+    stripeCheckoutSessionId: row.stripe_checkout_session_id || '',
+    stripePaymentIntentId: row.stripe_payment_intent_id || '',
+    stripeCustomerId: row.stripe_customer_id || '',
+    stripeLastEventType: row.stripe_last_event_type || '',
+    stripeLastEventAt: row.stripe_last_event_at || '',
+    paidAt: row.paid_at || '',
     privacyConsent: row.privacy_consent === 1,
     termsConsent: row.terms_consent === 1,
     privacyPolicyVersion: row.privacy_policy_version || '',
@@ -1716,6 +1846,105 @@ function getRegistrationById(db, registrationId) {
   return mapRegistrationRow(row);
 }
 
+function getRegistrationByStripeCheckoutSessionId(db, sessionId) {
+  const row = db
+    .prepare('SELECT * FROM registrations WHERE stripe_checkout_session_id = ?')
+    .get(String(sessionId || '').trim());
+  if (!row) return null;
+  return mapRegistrationRow(row);
+}
+
+function updateRegistrationStripeTracking(db, registrationId, tracking = {}) {
+  const current = getRegistrationById(db, registrationId);
+  if (!current) return 0;
+
+  const nextCheckoutSessionId = String(tracking.checkoutSessionId || current.stripeCheckoutSessionId || '').trim();
+  const nextPaymentIntentId = String(tracking.paymentIntentId || current.stripePaymentIntentId || '').trim();
+  const nextCustomerId = String(tracking.customerId || current.stripeCustomerId || '').trim();
+  const nextEventType = String(tracking.lastEventType || current.stripeLastEventType || '').trim();
+  const nextEventAt = String(tracking.lastEventAt || current.stripeLastEventAt || '').trim();
+  const nextPaidAt = String(tracking.paidAt || current.paidAt || '').trim();
+
+  const update = db.prepare(`
+    UPDATE registrations
+    SET
+      stripe_checkout_session_id = ?,
+      stripe_payment_intent_id = ?,
+      stripe_customer_id = ?,
+      stripe_last_event_type = ?,
+      stripe_last_event_at = ?,
+      paid_at = ?
+    WHERE id = ?
+  `);
+
+  const result = update.run(
+    nextCheckoutSessionId,
+    nextPaymentIntentId,
+    nextCustomerId,
+    nextEventType,
+    nextEventAt,
+    nextPaidAt,
+    String(registrationId || '').trim()
+  );
+
+  return Number(result.changes || 0);
+}
+
+function syncRegistrationFromStripeSession(db, session, options = {}) {
+  const eventType = String(options.eventType || '').trim();
+  const eventCreatedAt = String(options.eventCreatedAt || '').trim() || new Date().toISOString();
+  const identifiers = extractStripeSessionIdentifiers(session);
+
+  let registrationId = extractRegistrationIdFromStripeSession(session);
+  if (!registrationId && identifiers.checkoutSessionId) {
+    const bySession = getRegistrationByStripeCheckoutSessionId(db, identifiers.checkoutSessionId);
+    registrationId = bySession?.id || '';
+  }
+  if (!registrationId) {
+    return {
+      registrationId: '',
+      found: false,
+      paid: isStripeSessionPaid(session, eventType),
+      statusChanged: false
+    };
+  }
+
+  const existing = getRegistrationById(db, registrationId);
+  if (!existing) {
+    return {
+      registrationId: '',
+      found: false,
+      paid: isStripeSessionPaid(session, eventType),
+      statusChanged: false
+    };
+  }
+
+  updateRegistrationStripeTracking(db, registrationId, {
+    checkoutSessionId: identifiers.checkoutSessionId,
+    paymentIntentId: identifiers.paymentIntentId,
+    customerId: identifiers.customerId,
+    lastEventType: eventType,
+    lastEventAt: eventCreatedAt,
+    paidAt: isStripeSessionPaid(session, eventType) ? eventCreatedAt : ''
+  });
+
+  const paid = isStripeSessionPaid(session, eventType);
+  let statusChanged = false;
+  if (paid) {
+    statusChanged = updateRegistrationStatus(db, registrationId, 'PAID', { paidAt: eventCreatedAt }) > 0;
+  }
+
+  return {
+    registrationId,
+    found: true,
+    paid,
+    statusChanged,
+    checkoutSessionId: identifiers.checkoutSessionId,
+    paymentIntentId: identifiers.paymentIntentId,
+    customerId: identifiers.customerId
+  };
+}
+
 async function createCheckoutSessionForRegistration(db, registrationId, options = {}) {
   const registration = getRegistrationById(db, registrationId);
   if (!registration) {
@@ -1737,6 +1966,17 @@ async function createCheckoutSessionForRegistration(db, registrationId, options 
     successUrl,
     cancelUrl
   });
+
+  try {
+    await runWithSqliteRetry(() => updateRegistrationStripeTracking(db, registration.id, {
+      checkoutSessionId: session.id,
+      lastEventType: 'checkout.session.created',
+      lastEventAt: new Date().toISOString()
+    }));
+  } catch (error) {
+    console.error(`Stripe session tracking update failed for ${registration.id}: ${error.message}`);
+  }
+
   return {
     registration,
     session
@@ -1757,9 +1997,11 @@ function insertRegistration(db, registration) {
       camp_type, meal_plan, accommodation,
       wants_exam, target_grade, wants_exam_iaido, target_grade_iaido, wants_exam_jodo, target_grade_jodo,
       billing_full_name, billing_zip, billing_city, billing_address, billing_country,
-      food_notes, price_breakdown, privacy_consent, terms_consent,
+      food_notes, price_breakdown,
+      stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_last_event_type, stripe_last_event_at, paid_at,
+      privacy_consent, terms_consent,
       privacy_policy_version, terms_version, privacy_consent_at, terms_consent_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   insert.run(
@@ -1792,6 +2034,12 @@ function insertRegistration(db, registration) {
     registration.billingCountry,
     registration.foodNotes,
     JSON.stringify(registration.priceBreakdown),
+    String(registration.stripeCheckoutSessionId || ''),
+    String(registration.stripePaymentIntentId || ''),
+    String(registration.stripeCustomerId || ''),
+    String(registration.stripeLastEventType || ''),
+    String(registration.stripeLastEventAt || ''),
+    String(registration.paidAt || ''),
     registration.privacyConsent ? 1 : 0,
     registration.termsConsent ? 1 : 0,
     registration.privacyPolicyVersion || '',
@@ -1801,9 +2049,28 @@ function insertRegistration(db, registration) {
   );
 }
 
-function updateRegistrationStatus(db, registrationId, status) {
+function updateRegistrationStatus(db, registrationId, status, options = {}) {
+  const normalizedStatus = String(status || '').trim();
+  const safeRegistrationId = String(registrationId || '').trim();
+
+  if (normalizedStatus === 'PAID') {
+    const paidAt = String(options.paidAt || new Date().toISOString()).trim();
+    const updatePaid = db.prepare(`
+      UPDATE registrations
+      SET
+        status = ?,
+        paid_at = CASE
+          WHEN COALESCE(paid_at, '') = '' THEN ?
+          ELSE paid_at
+        END
+      WHERE id = ?
+    `);
+    const result = updatePaid.run(normalizedStatus, paidAt, safeRegistrationId);
+    return Number(result.changes || 0);
+  }
+
   const update = db.prepare('UPDATE registrations SET status = ? WHERE id = ?');
-  const result = update.run(status, registrationId);
+  const result = update.run(normalizedStatus, safeRegistrationId);
   return Number(result.changes || 0);
 }
 
@@ -2183,6 +2450,12 @@ function buildCsvExport(registrations) {
     'billing_address',
     'billing_country',
     'food_notes',
+    'stripe_checkout_session_id',
+    'stripe_payment_intent_id',
+    'stripe_customer_id',
+    'stripe_last_event_type',
+    'stripe_last_event_at',
+    'paid_at',
     'privacy_consent',
     'terms_consent',
     'privacy_policy_version',
@@ -2233,6 +2506,12 @@ function buildCsvExport(registrations) {
       registration.billingAddress,
       registration.billingCountry,
       registration.foodNotes,
+      registration.stripeCheckoutSessionId,
+      registration.stripePaymentIntentId,
+      registration.stripeCustomerId,
+      registration.stripeLastEventType,
+      registration.stripeLastEventAt,
+      registration.paidAt,
       registration.privacyConsent ? 'true' : 'false',
       registration.termsConsent ? 'true' : 'false',
       registration.privacyPolicyVersion,
@@ -2338,6 +2617,76 @@ function buildRetryPaymentToken(registrationId) {
   return {
     token: `${encodedPayload}.${signature}`,
     expiresAt: new Date(exp * 1000).toISOString()
+  };
+}
+
+function buildRetryPaymentUrl(token) {
+  const safeToken = String(token || '').trim();
+  return `${APP_BASE_URL}/retry-payment?token=${encodeURIComponent(safeToken)}`;
+}
+
+function buildRetryPaymentEmailMessage(registration, retryUrl, expiresAtIso) {
+  const fullName = String(registration?.fullName || '').trim() || 'Participant';
+  const registrationId = String(registration?.id || '').trim();
+  const expiresAtText = expiresAtIso ? new Date(expiresAtIso).toLocaleString('en-GB') : '';
+  const amount = formatCurrency(registration?.amount ?? registration?.amountHuf ?? 0, registration?.currency || 'EUR');
+  const packageLabel = getCampTypeLabel(registration?.campType);
+
+  const subject = `Payment link - ${registrationId}`;
+  const textLines = [
+    `Hello ${fullName},`,
+    '',
+    'Your previous payment was not completed.',
+    'Please use the link below to complete your payment:',
+    retryUrl,
+    '',
+    `Registration ID: ${registrationId}`,
+    `Package: ${packageLabel}`,
+    `Amount: ${amount}`
+  ];
+
+  if (expiresAtText) {
+    textLines.push(`Link expires at: ${expiresAtText}`);
+  }
+
+  textLines.push('', 'If you have any issue, please reply to this email.', '', 'Best regards,', 'Organizing Team');
+
+  const text = textLines.join('\n');
+  const html = `
+    <h2>Payment link</h2>
+    <p>Hello ${escapeHtml(fullName)},</p>
+    <p>Your previous payment was not completed.</p>
+    <p>Please use this secure payment link to continue:</p>
+    <p><a href="${escapeHtml(retryUrl)}">${escapeHtml(retryUrl)}</a></p>
+    <p><strong>Registration ID:</strong> ${escapeHtml(registrationId)}<br />
+       <strong>Package:</strong> ${escapeHtml(packageLabel)}<br />
+       <strong>Amount:</strong> ${escapeHtml(amount)}${expiresAtText ? `<br /><strong>Link expires at:</strong> ${escapeHtml(expiresAtText)}` : ''}</p>
+    <p>If you have any issue, please reply to this email.</p>
+    <p>Best regards,<br />Organizing Team</p>
+  `;
+
+  return { subject, text, html };
+}
+
+async function sendRetryPaymentEmail(registration) {
+  if (!isBrevoEnabled()) {
+    throw createError(503, 'Email sending is not configured. Set Brevo env values first.');
+  }
+
+  const retry = buildRetryPaymentToken(registration.id);
+  const retryUrl = buildRetryPaymentUrl(retry.token);
+  const message = buildRetryPaymentEmailMessage(registration, retryUrl, retry.expiresAt);
+
+  await sendBrevoEmail({
+    toEmail: registration.email,
+    toName: registration.fullName,
+    subject: message.subject,
+    textContent: message.text,
+    htmlContent: message.html
+  });
+
+  return {
+    expiresAt: retry.expiresAt
   };
 }
 
@@ -3228,13 +3577,17 @@ function createServer(options = {}) {
       return;
     }
 
-    if (req.method === 'POST' && pathname === '/api/admin/registrations/retry-link') {
+    if (req.method === 'POST' && pathname === '/api/admin/registrations/send-retry-payment-email') {
       if (!isAdminAuthenticated(req, db)) {
         sendJson(res, 401, { error: 'Admin login required.' });
         return;
       }
       if (!isStripeEnabled()) {
         sendJson(res, 503, { error: 'Stripe is not configured. Set STRIPE_SECRET_KEY first.' });
+        return;
+      }
+      if (!isBrevoEnabled()) {
+        sendJson(res, 503, { error: 'Email sending is not configured. Set Brevo env values first.' });
         return;
       }
 
@@ -3256,21 +3609,41 @@ function createServer(options = {}) {
           sendJson(res, 400, { error: 'Registration is already paid.' });
           return;
         }
-
         if (registration.status === 'DELETED' || registration.status === 'ANONYMIZED') {
-          sendJson(res, 400, { error: `Cannot create retry link for status: ${registration.status}.` });
+          sendJson(res, 400, { error: `Cannot send retry payment email for status: ${registration.status}.` });
+          return;
+        }
+        if (!registration.email) {
+          sendJson(res, 400, { error: 'Registration has no email address.' });
           return;
         }
 
-        const retry = buildRetryPaymentToken(registration.id);
-        const url = `${APP_BASE_URL}/retry-payment?token=${encodeURIComponent(retry.token)}`;
+        const sent = await sendRetryPaymentEmail(registration);
+
+        try {
+          await runWithSqliteRetry(() => insertAdminEmailLog(db, {
+            requestedByIp: getClientIp(req),
+            recipientMode: 'selected',
+            recipientCount: 1,
+            successCount: 1,
+            failedCount: 0,
+            templateKey: 'retry_payment_link',
+            subject: `Payment link - ${registration.id}`,
+            failures: []
+          }));
+        } catch (logError) {
+          console.error(`Admin email log write failed: ${logError.message}`);
+        }
+
         sendJson(res, 200, {
+          message: `Payment link email sent to ${registration.email}.`,
           registrationId: registration.id,
-          url,
-          expiresAt: retry.expiresAt
+          email: registration.email,
+          expiresAt: sent.expiresAt
         });
       } catch (error) {
-        sendJson(res, 400, { error: error.message || 'Invalid request' });
+        const statusCode = Number(error.statusCode) || 400;
+        sendJson(res, statusCode, { error: error.message || 'Could not send retry payment email.' });
       }
       return;
     }
@@ -3442,6 +3815,55 @@ function createServer(options = {}) {
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/api/payments/confirm') {
+      try {
+        const body = await parseJsonBody(req);
+        const sessionId = String(body?.sessionId || '').trim();
+        if (!sessionId) {
+          sendJson(res, 400, { error: 'sessionId is required.' });
+          return;
+        }
+
+        const session = await getStripeCheckoutSession(sessionId);
+        const eventCreatedAt = stripeUnixToIso(session?.created) || new Date().toISOString();
+        const syncResult = await runWithSqliteRetry(() => syncRegistrationFromStripeSession(db, session, {
+          eventType: 'checkout.session.confirm_lookup',
+          eventCreatedAt
+        }));
+
+        if (!syncResult.registrationId) {
+          sendJson(res, 404, { error: 'Could not match this Stripe session to any registration.' });
+          return;
+        }
+
+        if (syncResult.paid && isSzamlazzEnabled()) {
+          try {
+            await createInvoiceForRegistration(db, syncResult.registrationId, { triggerSource: 'stripe_confirm' });
+          } catch (invoiceError) {
+            console.error(`Invoice creation failed for ${syncResult.registrationId}: ${invoiceError.message}`);
+          }
+        }
+
+        const registration = getRegistrationById(db, syncResult.registrationId);
+        sendJson(res, 200, {
+          registrationId: syncResult.registrationId,
+          registrationStatus: registration?.status || 'UNKNOWN',
+          paid: Boolean(syncResult.paid),
+          stripe: {
+            sessionId: getStripeStringId(session?.id),
+            paymentStatus: String(session?.payment_status || '').trim().toLowerCase(),
+            checkoutStatus: String(session?.status || '').trim().toLowerCase(),
+            paymentIntentId: getStripeStringId(session?.payment_intent),
+            customerId: getStripeStringId(session?.customer)
+          }
+        });
+      } catch (error) {
+        const statusCode = Number(error.statusCode) || 400;
+        sendJson(res, statusCode, { error: error.message || 'Could not confirm payment.' });
+      }
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/invoices/create') {
       if (!isAdminAuthenticated(req, db)) {
         sendJson(res, 401, { error: 'Admin login required.' });
@@ -3487,27 +3909,28 @@ function createServer(options = {}) {
         }
 
         const eventType = String(event?.type || '');
-        const session = event?.data?.object || {};
-        const metadataRegistrationId = String(session?.metadata?.registration_id || '').trim();
-        const clientReferenceId = String(session?.client_reference_id || '').trim();
-        const registrationId = metadataRegistrationId || clientReferenceId;
+        if (eventType.startsWith('checkout.session.')) {
+          const session = event?.data?.object || {};
+          const eventCreatedAt = stripeUnixToIso(event?.created) || new Date().toISOString();
+          const syncResult = await runWithSqliteRetry(() => syncRegistrationFromStripeSession(db, session, {
+            eventType,
+            eventCreatedAt
+          }));
 
-        if (
-          (eventType === 'checkout.session.completed' || eventType === 'checkout.session.async_payment_succeeded') &&
-          registrationId
-        ) {
-          await runWithSqliteRetry(() => updateRegistrationStatus(db, registrationId, 'PAID'));
-          if (isSzamlazzEnabled()) {
+          if (!syncResult.registrationId) {
+            console.warn(`Stripe webhook ${eventType}: registration could not be resolved.`);
+          } else if (syncResult.paid && isSzamlazzEnabled()) {
             try {
-              await createInvoiceForRegistration(db, registrationId, { triggerSource: 'stripe_webhook' });
+              await createInvoiceForRegistration(db, syncResult.registrationId, { triggerSource: 'stripe_webhook' });
             } catch (invoiceError) {
-              console.error(`Invoice creation failed for ${registrationId}: ${invoiceError.message}`);
+              console.error(`Invoice creation failed for ${syncResult.registrationId}: ${invoiceError.message}`);
             }
           }
         }
 
         sendJson(res, 200, { received: true });
       } catch (error) {
+        console.error(`Stripe webhook error: ${error.message}`);
         const statusCode = Number(error.statusCode) || 400;
         sendJson(res, statusCode, { error: error.message || 'Webhook processing failed.' });
       }

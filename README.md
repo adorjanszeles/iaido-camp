@@ -28,6 +28,8 @@ Admin:
 - Élő ármegjelenítés EUR pénznemben.
 - Stripe Checkout indítás regisztráció után.
 - Stripe webhook alapján státuszfrissítés `PAID`-ra.
+- Stripe fizetés megerősítés a success oldalról (`/api/payments/confirm`) webhook késés/miss esetére.
+- Stripe azonosítók mentése regisztrációhoz (checkout session, payment intent, customer, utolsó event, paid timestamp).
 - Sikertelen fizetés esetén újrafizetési link kezelése.
 
 ### Számlázás (Számlázz.hu)
@@ -40,6 +42,7 @@ Admin:
 - Jelszó alapú belépés.
 - Regisztráltak listája, keresés név/email alapján.
 - Részletes jelentkezői adatok lenyitható nézetben.
+- Egyéni újrafizetési email küldés adminból (Stripe retry link emailben).
 - Státusz alapú törlés (`DELETED`, sor megőrzéssel).
 - GDPR anonimizálás (`ANONYMIZED`).
 - CSV export.
@@ -159,6 +162,7 @@ Publikus:
 - `POST /api/register`
 - `POST /api/stripe/webhook`
 - `POST /api/payments/create-checkout-session` (retry tokennel)
+- `POST /api/payments/confirm` (Stripe session alapú státusz megerősítés)
 
 Admin auth:
 - `GET /api/admin/session`
@@ -178,7 +182,7 @@ Admin funkciók:
 - `POST /api/admin/email/send`
 - `POST /api/admin/registrations/mark-deleted`
 - `POST /api/admin/registrations/anonymize`
-- `POST /api/admin/registrations/retry-link`
+- `POST /api/admin/registrations/send-retry-payment-email`
 - `POST /api/payments/create-checkout-session` (admin manuális)
 - `POST /api/invoices/create` (admin manuális számla létrehozás)
 
@@ -209,6 +213,12 @@ erDiagram
         TEXT target_grade_iaido
         INTEGER wants_exam_jodo
         TEXT target_grade_jodo
+        TEXT stripe_checkout_session_id
+        TEXT stripe_payment_intent_id
+        TEXT stripe_customer_id
+        TEXT stripe_last_event_type
+        TEXT stripe_last_event_at
+        TEXT paid_at
     }
 
     INVOICE_RECORDS {

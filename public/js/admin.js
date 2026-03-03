@@ -160,6 +160,12 @@
         ${renderDetailField('Billing city', item.billingCity)}
         ${renderDetailField('Billing address', item.billingAddress)}
         ${renderDetailField('Billing country', item.billingCountry)}
+        ${renderDetailField('Stripe checkout session', item.stripeCheckoutSessionId)}
+        ${renderDetailField('Stripe payment intent', item.stripePaymentIntentId)}
+        ${renderDetailField('Stripe customer', item.stripeCustomerId)}
+        ${renderDetailField('Stripe last event', item.stripeLastEventType)}
+        ${renderDetailField('Stripe event at', item.stripeLastEventAt)}
+        ${renderDetailField('Paid at', item.paidAt)}
 
         ${renderDetailField('Privacy consent', boolToYesNo(item.privacyConsent))}
         ${renderDetailField('Terms consent', boolToYesNo(item.termsConsent))}
@@ -197,11 +203,11 @@
         const anonymizeAction = isAnonymized
           ? '<span class="helper">Anonymized</span>'
           : `<button class="btn secondary btn-small js-anonymize" data-registration-id="${item.id}" type="button">GDPR anonymize</button>`;
-        const retryLinkAction = isDeleted || isAnonymized || isPaid
+        const retryEmailAction = isDeleted || isAnonymized || isPaid
           ? '<span class="helper">-</span>'
-          : `<button class="btn secondary btn-small js-copy-retry-link" data-registration-id="${item.id}" type="button">Copy payment link</button>`;
+          : `<button class="btn secondary btn-small js-send-retry-email" data-registration-id="${item.id}" type="button">Send payment link email</button>`;
         const detailsToggle = `<button class="btn secondary btn-small js-toggle-details" data-registration-id="${item.id}" aria-expanded="false" type="button">Show details</button>`;
-        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${retryLinkAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}`;
+        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}`;
         const detailRow = `
           <tr class="registration-details-row" data-details-row="${item.id}" hidden>
             <td colspan="7">
@@ -767,8 +773,8 @@
     }
   }
 
-  async function copyRetryPaymentLink(registrationId) {
-    const response = await fetch('/api/admin/registrations/retry-link', {
+  async function sendRetryPaymentEmail(registrationId) {
+    const response = await fetch('/api/admin/registrations/send-retry-payment-email', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -786,30 +792,14 @@
       throw new Error(result.error || 'Failed to generate retry payment link.');
     }
 
-    const url = String(result.url || '');
-    if (!url) {
-      throw new Error('Retry link was not returned by the server.');
-    }
-
-    let copied = false;
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(url);
-      copied = true;
-    } else {
-      const tempInput = document.createElement('input');
-      tempInput.value = url;
-      document.body.appendChild(tempInput);
-      tempInput.select();
-      copied = document.execCommand('copy');
-      tempInput.remove();
-    }
-
-    if (copied) {
-      window.alert(`Retry payment link copied.\nExpires at: ${result.expiresAt}`);
+    const email = String(result.email || '').trim();
+    const expiresAt = String(result.expiresAt || '').trim();
+    const message = result.message || 'Payment link email sent.';
+    if (email || expiresAt) {
+      window.alert(`${message}${email ? `\nRecipient: ${email}` : ''}${expiresAt ? `\nLink expires at: ${expiresAt}` : ''}`);
       return;
     }
-
-    window.prompt('Copy retry payment link:', url);
+    window.alert(message);
   }
 
   async function updateAdminPassword(event) {
@@ -1065,11 +1055,11 @@
       return;
     }
 
-    const retryLinkButton = event.target.closest('.js-copy-retry-link');
-    if (retryLinkButton) {
-      const registrationId = retryLinkButton.getAttribute('data-registration-id');
+    const retryEmailButton = event.target.closest('.js-send-retry-email');
+    if (retryEmailButton) {
+      const registrationId = retryEmailButton.getAttribute('data-registration-id');
       if (!registrationId) return;
-      copyRetryPaymentLink(registrationId).catch((error) => {
+      sendRetryPaymentEmail(registrationId).catch((error) => {
         window.alert(error.message);
       });
       return;
