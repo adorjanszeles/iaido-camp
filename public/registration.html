@@ -48,15 +48,19 @@
 
             <div class="field">
               <label for="dateOfBirth">Date of birth (yyyy.mm.dd)</label>
-              <input
-                id="dateOfBirth"
-                name="dateOfBirth"
-                type="text"
-                inputmode="numeric"
-                placeholder="yyyy.mm.dd"
-                pattern="^\d{4}\.\d{2}\.\d{2}$"
-                title="Please use this format: yyyy.mm.dd"
-              />
+              <div class="date-picker-single">
+                <input
+                  id="dateOfBirth"
+                  name="dateOfBirth"
+                  type="text"
+                  placeholder="yyyy.mm.dd"
+                  pattern="^\d{4}\.\d{2}\.\d{2}$"
+                  title="Please use this format: yyyy.mm.dd"
+                  readonly
+                />
+                <span class="date-picker-icon" aria-hidden="true">&#128197;</span>
+                <input id="dateOfBirthPicker" class="date-picker-native" type="date" aria-label="Select date of birth" />
+              </div>
             </div>
 
             <div class="field">

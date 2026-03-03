@@ -388,6 +388,54 @@ img.demo {
   padding: 1.5rem 0 2rem;
 }
 
+.payment-status-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.payment-status-card {
+  width: min(760px, 100%);
+  text-align: center;
+}
+
+.payment-status-card .subtitle,
+.payment-status-card .muted {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.payment-status-card .cta-row {
+  justify-content: center;
+}
+
+.payment-status-icon {
+  width: clamp(88px, 12vw, 120px);
+  height: clamp(88px, 12vw, 120px);
+  margin: 0 auto 1rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: clamp(2.2rem, 4.6vw, 3.3rem);
+  font-weight: 800;
+  line-height: 1;
+  border: 2px solid transparent;
+  box-shadow: 0 16px 30px rgba(12, 37, 62, 0.2);
+}
+
+.payment-status-icon.success {
+  color: #f4fffb;
+  border-color: #7bc8a2;
+  background: linear-gradient(180deg, #2a8e5d 0%, #1f6f4a 100%);
+}
+
+.payment-status-icon.error {
+  color: #fff7f7;
+  border-color: #e2a0a0;
+  background: linear-gradient(180deg, #b64242 0%, #8f2f2f 100%);
+}
+
 #registration-form h2 {
   margin-top: 1.2rem;
 }
@@ -410,6 +458,50 @@ img.demo {
 
 .field.full {
   grid-column: 1 / -1;
+}
+
+.date-picker-single {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border: 1px solid #aec6df;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.date-picker-single:focus-within {
+  outline: 2px solid #9cc2e8;
+  outline-offset: 1px;
+}
+
+.date-picker-single #dateOfBirth {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.date-picker-single #dateOfBirth:focus {
+  outline: none;
+}
+
+.date-picker-icon {
+  padding: 0 0.75rem 0 0.3rem;
+  color: #355a7d;
+  font-size: 1rem;
+  pointer-events: none;
+}
+
+.date-picker-native {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 2.9rem;
+  height: 100%;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 label {

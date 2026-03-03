@@ -8,6 +8,9 @@
   const targetGradeJodoEl = document.getElementById('targetGradeJodo');
   const currentGradeIaidoEl = document.getElementById('currentGradeIaido');
   const currentGradeJodoEl = document.getElementById('currentGradeJodo');
+  const dateOfBirthEl = document.getElementById('dateOfBirth');
+  const dateOfBirthPickerEl = document.getElementById('dateOfBirthPicker');
+  const dateOfBirthTriggerEl = document.querySelector('.date-picker-single');
   const campTypeEl = document.getElementById('campType');
   const priceLinesEl = document.getElementById('price-lines');
   const priceTotalEl = document.getElementById('price-total');
@@ -94,6 +97,33 @@
   function showMessage(type, text) {
     messageEl.className = `notice ${type}`;
     messageEl.textContent = text;
+  }
+
+  function dottedFromIsoDate(isoDate) {
+    const match = String(isoDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return '';
+    return `${match[1]}.${match[2]}.${match[3]}`;
+  }
+
+  function isoFromDottedDate(dottedDate) {
+    const match = String(dottedDate || '').match(/^(\d{4})\.(\d{2})\.(\d{2})$/);
+    if (!match) return '';
+    return `${match[1]}-${match[2]}-${match[3]}`;
+  }
+
+  function syncBirthDateFromPicker() {
+    if (!dateOfBirthEl || !dateOfBirthPickerEl) return;
+    dateOfBirthEl.value = dottedFromIsoDate(dateOfBirthPickerEl.value);
+  }
+
+  function openBirthDatePicker() {
+    if (!dateOfBirthPickerEl) return;
+    if (typeof dateOfBirthPickerEl.showPicker === 'function') {
+      dateOfBirthPickerEl.showPicker();
+      return;
+    }
+    dateOfBirthPickerEl.focus();
+    dateOfBirthPickerEl.click();
   }
 
   function showPaymentReturnMessage() {
@@ -260,6 +290,8 @@
       }
 
       form.reset();
+      if (dateOfBirthPickerEl) dateOfBirthPickerEl.value = '';
+      if (dateOfBirthEl) dateOfBirthEl.value = '';
       syncExamFields();
       renderPriceSummary();
       showMessage('error', `Registration saved (${result.registrationId}), but payment link creation failed. Amount: ${amountText}. Please contact the organizer.`);
@@ -275,9 +307,25 @@
   wantsExamJodoEl.addEventListener('change', syncExamFields);
   currentGradeIaidoEl.addEventListener('change', syncExamFields);
   currentGradeJodoEl.addEventListener('change', syncExamFields);
+  if (dateOfBirthPickerEl) {
+    dateOfBirthPickerEl.addEventListener('change', syncBirthDateFromPicker);
+  }
+  if (dateOfBirthEl) {
+    dateOfBirthEl.addEventListener('click', openBirthDatePicker);
+  }
+  if (dateOfBirthTriggerEl) {
+    dateOfBirthTriggerEl.addEventListener('click', (event) => {
+      const clickedPicker = event.target === dateOfBirthPickerEl;
+      if (clickedPicker) return;
+      openBirthDatePicker();
+    });
+  }
   campTypeEl.addEventListener('change', renderPriceSummary);
   form.addEventListener('submit', submitForm);
 
+  if (dateOfBirthEl && dateOfBirthPickerEl && dateOfBirthEl.value) {
+    dateOfBirthPickerEl.value = isoFromDottedDate(dateOfBirthEl.value);
+  }
   showPaymentReturnMessage();
   syncExamFields();
   loadPricingConfig();

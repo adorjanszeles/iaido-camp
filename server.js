@@ -50,8 +50,8 @@ const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || '').tr
 const STRIPE_API_BASE_URL = 'https://api.stripe.com/v1';
 const STRIPE_REQUEST_TIMEOUT_MS = 10000;
 const STRIPE_WEBHOOK_TOLERANCE_SECONDS = 300;
-const STRIPE_SUCCESS_URL = String(process.env.STRIPE_SUCCESS_URL || `${APP_BASE_URL}/registration?payment=success`).trim();
-const STRIPE_CANCEL_URL = String(process.env.STRIPE_CANCEL_URL || `${APP_BASE_URL}/registration?payment=cancel`).trim();
+const STRIPE_SUCCESS_URL = String(process.env.STRIPE_SUCCESS_URL || `${APP_BASE_URL}/payment-success`).trim();
+const STRIPE_CANCEL_URL = String(process.env.STRIPE_CANCEL_URL || `${APP_BASE_URL}/payment-cancel`).trim();
 const PRICE_CATALOG = {
   campType: {
     iaido: { label: 'Iaido seminar', defaultAmount: 149 },
@@ -805,8 +805,8 @@ async function createCheckoutSessionForRegistration(db, registrationId, options 
     throw createError(400, `Cannot create payment session for status: ${registration.status}.`);
   }
 
-  const successUrl = options.successUrl || `${APP_BASE_URL}/registration?payment=success&registrationId=${encodeURIComponent(registration.id)}`;
-  const cancelUrl = options.cancelUrl || `${APP_BASE_URL}/registration?payment=cancel&registrationId=${encodeURIComponent(registration.id)}`;
+  const successUrl = options.successUrl || STRIPE_SUCCESS_URL;
+  const cancelUrl = options.cancelUrl || STRIPE_CANCEL_URL;
 
   const session = await createStripeCheckoutSession(registration, {
     ...options,
@@ -1015,7 +1015,8 @@ function isValidDateOfBirth(value) {
   if (!value) return true;
   if (typeof value !== 'string') return false;
 
-  const match = value.trim().match(/^(\d{4})\.(\d{2})\.(\d{2})$/);
+  const normalized = value.trim();
+  const match = normalized.match(/^(\d{4})[.-](\d{2})[.-](\d{2})$/);
   if (!match) return false;
 
   const year = Number(match[1]);
@@ -1105,7 +1106,7 @@ function validateRegistration(data, pricingSettings = DEFAULT_PRICING_SETTINGS) 
   if (!isNonEmptyString(data.fullName)) errors.push('Full name is required.');
   if (!isValidEmail(data.email)) errors.push('A valid email address is required.');
   if (!isValidPhone(data.phone)) errors.push('A valid phone number is required.');
-  if (!isValidDateOfBirth(data.dateOfBirth)) errors.push('Date of birth must use yyyy.mm.dd format (for example: 1998.04.27).');
+  if (!isValidDateOfBirth(data.dateOfBirth)) errors.push('Date of birth format is invalid.');
   if (!isNonEmptyString(data.city)) errors.push('City is required.');
 
   const needsIaidoGrade = data.campType === 'iaido' || data.campType === 'both' || data.wantsExamIaido;
@@ -1598,6 +1599,8 @@ function getStaticFilePath(urlPath) {
     '/program': 'program.html',
     '/faq': 'faq.html',
     '/info': 'info.html',
+    '/payment-success': 'payment-success.html',
+    '/payment-cancel': 'payment-cancel.html',
     '/privacy': 'privacy.html',
     '/terms': 'terms.html',
     '/registration': 'registration.html',
