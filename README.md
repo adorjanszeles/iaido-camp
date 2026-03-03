@@ -103,7 +103,6 @@ NODE_ENV=production
 TRUST_PROXY=true
 
 ADMIN_PASSWORD=...
-ADMIN_SESSION_SECRET=...
 
 STRIPE_SECRET_KEY=...
 STRIPE_WEBHOOK_SECRET=...
@@ -119,6 +118,10 @@ EMAIL_FROM_NAME=Ishido Sensei - Summer Seminar
 
 ### Opcionális
 ```bash
+# If missing, the app auto-generates a strong secret and stores it in SQLite app_settings.
+# Recommended in production: set this explicitly as an environment variable.
+ADMIN_SESSION_SECRET=...
+
 ADMIN_NOTIFY_EMAIL=you@example.com
 ADMIN_EMAIL_MAX_RECIPIENTS=500
 REGISTRATION_RATE_LIMIT_COUNT=30
@@ -249,8 +252,9 @@ erDiagram
 ```
 
 Megjegyzés az `app_settings` kulcsokról:
-- `pricing_v1`: admin árbeállítások JSON formában.
+- `pricing_settings_v1`: admin árbeállítások JSON formában.
 - `admin_auth_v1`: admin jelszó hash + salt + `changedAt` JSON formában.
+- `admin_session_secret_v1`: automatikusan generált admin session secret (ha env-ben nincs megadva).
 
 ## Deployment megjegyzés (Railway)
 - Node 22 szükséges.

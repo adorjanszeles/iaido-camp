@@ -36,7 +36,7 @@ const MIME_TYPES = {
 };
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
-const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || 'replace-this-secret-in-production';
+const ADMIN_SESSION_SECRET_FROM_ENV = String(process.env.ADMIN_SESSION_SECRET || '').trim();
 const ADMIN_SESSION_TTL_SECONDS = 60 * 60 * 12;
 const ADMIN_SESSION_COOKIE = 'admin_session';
 const ADMIN_PASSWORD_MIN_LENGTH = 8;
@@ -81,6 +81,7 @@ const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
 const EMAIL_REQUEST_TIMEOUT_MS = 8000;
 const APP_SETTING_KEY_PRICING = 'pricing_settings_v1';
 const APP_SETTING_KEY_ADMIN_AUTH = 'admin_auth_v1';
+const APP_SETTING_KEY_ADMIN_SESSION_SECRET = 'admin_session_secret_v1';
 const ADMIN_EMAIL_TEMPLATES = [
   {
     key: 'important_update',
@@ -169,6 +170,7 @@ const PRICE_CATALOG = {
 };
 const adminLoginFailures = new Map();
 const rateLimitBuckets = new Map();
+let ADMIN_SESSION_SECRET_RUNTIME = '';
 
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -396,6 +398,50 @@ function isValidAdminPassword(password) {
   const hasLetter = /[A-Za-z]/.test(value);
   const hasDigit = /\d/.test(value);
   return hasLetter && hasDigit;
+}
+
+function isValidAdminSessionSecret(secret) {
+  return String(secret || '').trim().length >= 32;
+}
+
+function resolveAdminSessionSecret(db) {
+  if (ADMIN_SESSION_SECRET_FROM_ENV) {
+    if (!isValidAdminSessionSecret(ADMIN_SESSION_SECRET_FROM_ENV)) {
+      throw new Error('Invalid ADMIN_SESSION_SECRET. Use a long random secret (min 32 chars).');
+    }
+    return {
+      secret: ADMIN_SESSION_SECRET_FROM_ENV,
+      source: 'env'
+    };
+  }
+
+  const stored = String(getAppSettingValue(db, APP_SETTING_KEY_ADMIN_SESSION_SECRET) || '').trim();
+  if (isValidAdminSessionSecret(stored)) {
+    return {
+      secret: stored,
+      source: 'db'
+    };
+  }
+
+  const generated = randomBytes(48).toString('base64url');
+  setAppSettingValue(db, APP_SETTING_KEY_ADMIN_SESSION_SECRET, generated);
+  return {
+    secret: generated,
+    source: 'generated'
+  };
+}
+
+function initializeAdminSessionSecret(db) {
+  const resolved = resolveAdminSessionSecret(db);
+  ADMIN_SESSION_SECRET_RUNTIME = resolved.secret;
+  return resolved;
+}
+
+function getAdminSessionSecretOrThrow() {
+  if (!isValidAdminSessionSecret(ADMIN_SESSION_SECRET_RUNTIME)) {
+    throw new Error('Admin session secret is not initialized.');
+  }
+  return ADMIN_SESSION_SECRET_RUNTIME;
 }
 
 function toEnumValue(value, allowedValues, fallbackValue) {
@@ -2261,11 +2307,11 @@ function clearAdminSessionCookie(res) {
 }
 
 function signSessionPayload(encodedPayload) {
-  return createHmac('sha256', ADMIN_SESSION_SECRET).update(encodedPayload).digest('base64url');
+  return createHmac('sha256', getAdminSessionSecretOrThrow()).update(encodedPayload).digest('base64url');
 }
 
 function signRetryPaymentPayload(encodedPayload) {
-  return createHmac('sha256', ADMIN_SESSION_SECRET).update(`retry-payment:${encodedPayload}`).digest('base64url');
+  return createHmac('sha256', getAdminSessionSecretOrThrow()).update(`retry-payment:${encodedPayload}`).digest('base64url');
 }
 
 function buildAdminSessionToken(passwordChangedAt) {
@@ -2689,11 +2735,7 @@ function validateRuntimeConfigForProduction() {
     return;
   }
 
-  if (
-    !ADMIN_SESSION_SECRET ||
-    ADMIN_SESSION_SECRET === 'replace-this-secret-in-production' ||
-    ADMIN_SESSION_SECRET.length < 32
-  ) {
+  if (ADMIN_SESSION_SECRET_FROM_ENV && !isValidAdminSessionSecret(ADMIN_SESSION_SECRET_FROM_ENV)) {
     throw new Error('Invalid ADMIN_SESSION_SECRET for production. Use a long random secret (min 32 chars).');
   }
 
@@ -2707,8 +2749,12 @@ function validateRuntimeConfigForProduction() {
 }
 
 function createServer(options = {}) {
-  validateRuntimeConfigForProduction();
   const db = options.db || initDatabase();
+  validateRuntimeConfigForProduction();
+  const sessionSecret = initializeAdminSessionSecret(db);
+  if (IS_PRODUCTION && sessionSecret.source !== 'env') {
+    console.warn('ADMIN_SESSION_SECRET is not set. Generated secret is stored in SQLite app_settings and reused on restart.');
+  }
   let pricingSettings = loadPricingSettings(db);
 
   return http.createServer(async (req, res) => {
