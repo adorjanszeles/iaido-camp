@@ -127,6 +127,28 @@ const ADMIN_EMAIL_TEMPLATES = [
       'Best regards,',
       'Organizing Team'
     ].join('\n')
+  },
+  {
+    key: 'final_reminder',
+    label: 'Final reminder (1 week)',
+    subject: 'Reminder: See you next week at Ludovika Arena!',
+    body: [
+      'Dear {{fullName}},',
+      '',
+      'Only one week left until the Ishido Sensei Summer Seminar 2026 starts. We are really looking forward to practicing together.',
+      '',
+      'Important reminders:',
+      '- Venue: Ludovika Arena (1083 Budapest, Ludovika ter 2.)',
+      '- Start: Please arrive at least 30 minutes before your first training session for on-site registration.',
+      '- What to bring: your registration confirmation email (digital), proper training attire (nafuda is required), and the appropriate equipment for your discipline, including koryu practice.',
+      '- Parking: paid parking in the surrounding streets on Friday, free on the weekend.',
+      '',
+      'If you have any questions, feel free to contact us.',
+      'We wish you a safe trip to Budapest.',
+      '',
+      'Best regards,',
+      'The Organizing Team'
+    ].join('\n')
   }
 ];
 const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || '').trim();
@@ -1263,45 +1285,45 @@ async function createInvoiceForRegistration(db, registrationId, options = {}) {
 }
 
 function buildRegistrationEmailContent(registration, pricing) {
-  const participantName = escapeHtml(registration.fullName || '');
+  const participantNamePlain = String(registration.fullName || '').trim() || 'Participant';
+  const participantName = escapeHtml(participantNamePlain);
   const registrationId = escapeHtml(registration.id || '');
-  const createdAt = escapeHtml(new Date(registration.createdAt).toLocaleString('en-GB'));
-  const pricingRows = pricing.lineItems
-    .map((item) => {
-      const amount = Number(item.amount ?? item.amountHuf ?? 0);
-      return `<li>${escapeHtml(item.label)}: <strong>${escapeHtml(formatCurrency(amount, pricing.currency))}</strong></li>`;
-    })
-    .join('');
   const totalRaw = Number(pricing.total ?? pricing.totalAmount ?? pricing.totalHuf ?? 0);
   const total = escapeHtml(formatCurrency(totalRaw, pricing.currency));
   const manageUrl = `${APP_BASE_URL}/admin`;
+  const seminarDateLabel = '30 July - 3 August 2026 (Iaido & Jodo)';
 
   const participantHtml = `
-    <h2>Registration Received</h2>
-    <p>Hello ${participantName},</p>
-    <p>Thank you for your registration to the Ishido Sensei - Summer Seminar 2026.</p>
-    <p><strong>Registration ID:</strong> ${registrationId}<br />
-       <strong>Date:</strong> ${createdAt}</p>
-    <h3>Selected options</h3>
-    <ul>${pricingRows}</ul>
-    <p><strong>Total:</strong> ${total}</p>
-    <p>This is your registration confirmation email.</p>
+    <h2>Successful Registration</h2>
+    <p>Dear ${participantName},</p>
+    <p>Thank you for registering for the Ishido Sensei Summer Seminar 2026. We are pleased to inform you that your registration and payment have been successfully processed.</p>
+    <h3>Event Details</h3>
+    <ul>
+      <li><strong>Venue:</strong> Ludovika Arena, Budapest</li>
+      <li><strong>Date:</strong> ${escapeHtml(seminarDateLabel)}</li>
+      <li><strong>Registration ID:</strong> #${registrationId}</li>
+    </ul>
+    <p>Please have this email ready (digital or printed) upon arrival for a smooth check-in process. We will soon send out the detailed schedule and further practical information.</p>
+    <p>We look forward to seeing you in the dojo.</p>
+    <p>Best regards,<br />The Organizing Team</p>
   `;
 
   const participantText = [
-    'Registration Received',
+    'Successful Registration',
     '',
-    `Hello ${registration.fullName},`,
-    'Thank you for your registration to the Ishido Sensei - Summer Seminar 2026.',
-    `Registration ID: ${registration.id}`,
-    `Date: ${new Date(registration.createdAt).toLocaleString('en-GB')}`,
-    'Selected options:',
-    ...pricing.lineItems.map((item) => {
-      const amount = Number(item.amount ?? item.amountHuf ?? 0);
-      return `- ${item.label}: ${formatCurrency(amount, pricing.currency)}`;
-    }),
-    `Total: ${formatCurrency(totalRaw, pricing.currency)}`,
-    'This is your registration confirmation email.'
+    `Dear ${participantNamePlain},`,
+    'Thank you for registering for the Ishido Sensei Summer Seminar 2026. We are pleased to inform you that your registration and payment have been successfully processed.',
+    '',
+    'Event Details:',
+    '- Venue: Ludovika Arena, Budapest',
+    `- Date: ${seminarDateLabel}`,
+    `- Registration ID: #${registration.id}`,
+    '',
+    'Please have this email ready (digital or printed) upon arrival for a smooth check-in process. We will soon send out the detailed schedule and further practical information.',
+    'We look forward to seeing you in the dojo.',
+    '',
+    'Best regards,',
+    'The Organizing Team'
   ].join('\n');
 
   const adminHtml = `
@@ -1324,7 +1346,7 @@ function buildRegistrationEmailContent(registration, pricing) {
 
   return {
     participant: {
-      subject: `Registration confirmation - ${registration.id}`,
+      subject: 'Confirmation: Successful Registration - Ishido Sensei Summer Seminar 2026',
       html: participantHtml,
       text: participantText
     },
@@ -2649,7 +2671,7 @@ function buildRetryPaymentEmailMessage(registration, retryUrl, expiresAtIso) {
     textLines.push(`Link expires at: ${expiresAtText}`);
   }
 
-  textLines.push('', 'If you have any issue, please reply to this email.', '', 'Best regards,', 'Organizing Team');
+  textLines.push('', 'If you have any issue, please contact the Organizing Team using the email address on the Contact page.', '', 'Best regards,', 'Organizing Team');
 
   const text = textLines.join('\n');
   const html = `
@@ -2661,7 +2683,7 @@ function buildRetryPaymentEmailMessage(registration, retryUrl, expiresAtIso) {
     <p><strong>Registration ID:</strong> ${escapeHtml(registrationId)}<br />
        <strong>Package:</strong> ${escapeHtml(packageLabel)}<br />
        <strong>Amount:</strong> ${escapeHtml(amount)}${expiresAtText ? `<br /><strong>Link expires at:</strong> ${escapeHtml(expiresAtText)}` : ''}</p>
-    <p>If you have any issue, please reply to this email.</p>
+    <p>If you have any issue, please contact the Organizing Team using the email address on the Contact page.</p>
     <p>Best regards,<br />Organizing Team</p>
   `;
 

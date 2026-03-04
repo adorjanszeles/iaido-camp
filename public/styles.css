@@ -178,6 +178,51 @@ a {
   margin-top: 0.9rem;
 }
 
+.welcome-overview {
+  width: min(920px, 100%);
+  margin: 0.2rem auto 0;
+  padding: 1rem 1rem 0.2rem;
+  border: 1px solid #c4d7eb;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(240, 247, 255, 0.95) 0%, rgba(232, 241, 251, 0.92) 100%);
+  text-align: left;
+}
+
+.welcome-overview h3 {
+  margin: 0.9rem 0 0.4rem;
+  font-size: 1.1rem;
+}
+
+.welcome-overview p {
+  margin: 0.52rem 0;
+  color: var(--muted);
+  line-height: 1.62;
+}
+
+.welcome-overview ul {
+  margin: 0.4rem 0 0.5rem 1.15rem;
+  padding: 0;
+  color: var(--muted);
+}
+
+.welcome-overview li {
+  margin: 0.22rem 0;
+  line-height: 1.55;
+}
+
+.welcome-overview-names {
+  margin: 0.2rem 0 0.6rem;
+  color: #274868;
+  font-weight: 700;
+  line-height: 1.42;
+}
+
+.welcome-overview-cta {
+  margin-top: 0.68rem;
+  color: #183e67;
+  font-weight: 700;
+}
+
 .hero {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -709,5 +754,9 @@ footer {
 
   .hero-banner {
     margin-top: 1rem;
+  }
+
+  .welcome-overview {
+    padding: 0.9rem 0.8rem 0.2rem;
   }
 }
