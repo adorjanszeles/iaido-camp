@@ -114,21 +114,6 @@ const ADMIN_EMAIL_TEMPLATES = [
     ].join('\n')
   },
   {
-    key: 'payment_reminder',
-    label: 'Payment reminder',
-    subject: 'Payment reminder - Ishido Sensei - Summer Seminar 2026',
-    body: [
-      'Hello {{fullName}},',
-      '',
-      'This is a reminder that your registration is currently in pending payment status.',
-      '',
-      'Please complete payment to finalize your participation.',
-      '',
-      'Best regards,',
-      'Organizing Team'
-    ].join('\n')
-  },
-  {
     key: 'final_reminder',
     label: 'Final reminder (1 week)',
     subject: 'Reminder: See you next week at Ludovika Arena!',
