@@ -3039,7 +3039,7 @@ function serveFile(res, filePath) {
   });
 }
 
-function getStats(registrations) {
+function getStats(registrations, pricingSettings = DEFAULT_PRICING_SETTINGS) {
   const activeRegistrations = registrations.filter((r) => r.status !== 'DELETED' && r.status !== 'ANONYMIZED');
   const deletedCount = registrations.filter((r) => r.status === 'DELETED').length;
   const anonymizedCount = registrations.filter((r) => r.status === 'ANONYMIZED').length;
@@ -3052,6 +3052,35 @@ function getStats(registrations) {
   const projectedRevenueEur = activeRegistrations
     .filter((r) => !r.currency || String(r.currency).toUpperCase() === 'EUR')
     .reduce((sum, current) => sum + Number(current.amount ?? current.amountHuf ?? 0), 0);
+  const activeEurRegistrations = activeRegistrations
+    .filter((r) => !r.currency || String(r.currency).toUpperCase() === 'EUR')
+    .slice()
+    .sort((a, b) => {
+      const left = String(a.createdAt || '');
+      const right = String(b.createdAt || '');
+      if (left === right) {
+        return String(a.id || '').localeCompare(String(b.id || ''));
+      }
+      return left.localeCompare(right);
+    });
+  const aamThresholdEur = getConfiguredAamThresholdEur(pricingSettings);
+  let cumulativeEur = 0;
+  let aamGrossEur = 0;
+  let vatGrossEur = 0;
+  for (const registration of activeEurRegistrations) {
+    const amount = Number(registration.amount ?? registration.amountHuf ?? 0);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    cumulativeEur += amount;
+
+    // Matches invoice-time rule: the invoice that reaches/exceeds threshold is already VAT.
+    if (aamThresholdEur > 0 && cumulativeEur >= aamThresholdEur) {
+      vatGrossEur += amount;
+    } else {
+      aamGrossEur += amount;
+    }
+  }
+  const vatBreakdown = calculateVatBreakdown(vatGrossEur, SZAMLAZZ_AFAKULCS_OVER_LIMIT);
+  const forecastVatAmountEur = Number(vatBreakdown.vat || 0);
 
   const byCampType = activeRegistrations.reduce((acc, current) => {
     acc[current.campType] = (acc[current.campType] || 0) + 1;
@@ -3102,6 +3131,11 @@ function getStats(registrations) {
     projectedRevenueByCurrency: { EUR: projectedRevenueEur },
     projectedRevenueHuf: 0,
     projectedRevenueEur,
+    aamThresholdEur,
+    aamGrossEur,
+    vatGrossEur,
+    forecastVatAmountEur,
+    vatRateKey: SZAMLAZZ_AFAKULCS_OVER_LIMIT,
     byCampType,
     iaidoApplicants,
     jodoApplicants,
@@ -3538,7 +3572,7 @@ function createServer(options = {}) {
         return;
       }
       const registrations = readRegistrations(db);
-      sendJson(res, 200, { stats: getStats(registrations) });
+      sendJson(res, 200, { stats: getStats(registrations, pricingSettings) });
       return;
     }
 

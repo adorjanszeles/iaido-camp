@@ -67,6 +67,10 @@
 
   function renderStats(stats) {
     const projectedRevenue = Number(stats.projectedRevenueEur || 0);
+    const aamGross = Number(stats.aamGrossEur || 0);
+    const vatGross = Number(stats.vatGrossEur || 0);
+    const forecastVatAmount = Number(stats.forecastVatAmountEur || 0);
+    const vatRateKey = String(stats.vatRateKey || '').trim() || 'VAT';
 
     statsEl.innerHTML = [
       renderStatCard('Active registrations', stats.total),
@@ -76,7 +80,10 @@
       renderStatCard('Anonymized', stats.anonymizedCount || 0),
       renderStatCard('Iaido exam applicants', stats.wantsExamIaido || 0),
       renderStatCard('Jodo exam applicants', stats.wantsExamJodo || 0),
-      renderStatCard('Projected revenue (EUR)', formatCurrency(projectedRevenue, 'EUR'))
+      renderStatCard('Projected revenue (EUR)', formatCurrency(projectedRevenue, 'EUR')),
+      renderStatCard('AAM gross (EUR)', formatCurrency(aamGross, 'EUR')),
+      renderStatCard(`${vatRateKey} gross (EUR)`, formatCurrency(vatGross, 'EUR')),
+      renderStatCard('Forecast VAT amount (EUR)', formatCurrency(forecastVatAmount, 'EUR'))
     ].join('');
   }
 
