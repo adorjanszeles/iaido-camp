@@ -15,6 +15,10 @@ const DB_BACKUP_DIR = (() => {
   return path.isAbsolute(raw) ? raw : path.resolve(__dirname, raw);
 })();
 const DB_BACKUP_ENABLED = String(process.env.DB_BACKUP_ENABLED || 'true').trim().toLowerCase() !== 'false';
+const DB_BACKUP_INTERVAL_MINUTES = (() => {
+  const raw = Number(process.env.DB_BACKUP_INTERVAL_MINUTES || 60);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 60;
+})();
 const DB_BACKUP_RETENTION_DAYS = (() => {
   const raw = Number(process.env.DB_BACKUP_RETENTION_DAYS || 30);
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 30;
@@ -1489,13 +1493,14 @@ function createDatabaseBackup(db) {
   return backupFile;
 }
 
-function msUntilNextMidnight(now = new Date()) {
-  const next = new Date(now);
-  next.setHours(24, 0, 0, 0);
-  return Math.max(1000, next.getTime() - now.getTime());
+function msUntilNextBackupRun(now = new Date()) {
+  const intervalMs = DB_BACKUP_INTERVAL_MINUTES * 60 * 1000;
+  const nowMs = now.getTime();
+  const nextMs = Math.floor(nowMs / intervalMs) * intervalMs + intervalMs;
+  return Math.max(1000, nextMs - nowMs);
 }
 
-function scheduleDailyBackups(db) {
+function schedulePeriodicBackups(db) {
   if (!DB_BACKUP_ENABLED) {
     console.log('SQLite backup scheduler disabled (DB_BACKUP_ENABLED=false).');
     return () => {};
@@ -1504,7 +1509,7 @@ function scheduleDailyBackups(db) {
   let timer = null;
 
   const scheduleNext = () => {
-    const delayMs = msUntilNextMidnight();
+    const delayMs = msUntilNextBackupRun();
     timer = setTimeout(async () => {
       try {
         const backupFile = await runWithSqliteRetry(() => createDatabaseBackup(db));
@@ -4018,16 +4023,58 @@ function createServer(options = {}) {
 
 if (require.main === module) {
   const db = initDatabase();
-  const stopBackupScheduler = scheduleDailyBackups(db);
+  const stopBackupScheduler = schedulePeriodicBackups(db);
   const server = createServer({ db });
+  let shutdownStarted = false;
+
+  const closeRuntimeResources = () => {
+    try {
+      stopBackupScheduler();
+    } catch (error) {
+      console.error(`Backup scheduler stop failed: ${error.message}`);
+    }
+    try {
+      db.close();
+    } catch (error) {
+      console.error(`Database close failed: ${error.message}`);
+    }
+  };
+
+  const shutdown = (signal) => {
+    if (shutdownStarted) return;
+    shutdownStarted = true;
+    console.log(`Received ${signal}. Starting graceful shutdown...`);
+
+    const forceExitTimer = setTimeout(() => {
+      console.error('Graceful shutdown timed out. Forcing exit.');
+      closeRuntimeResources();
+      process.exit(1);
+    }, 10_000);
+
+    if (typeof forceExitTimer.unref === 'function') {
+      forceExitTimer.unref();
+    }
+
+    server.close((error) => {
+      clearTimeout(forceExitTimer);
+      if (error) {
+        console.error(`HTTP server close failed: ${error.message}`);
+      }
+      closeRuntimeResources();
+      process.exit(error ? 1 : 0);
+    });
+  };
 
   server.listen(PORT, () => {
     console.log(`Iaido Camp server running on http://localhost:${PORT}`);
   });
 
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('exit', () => {
-    stopBackupScheduler();
-    db.close();
+    if (!shutdownStarted) {
+      closeRuntimeResources();
+    }
   });
 }
 

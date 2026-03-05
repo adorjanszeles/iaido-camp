@@ -70,7 +70,7 @@ Admin:
 - State-changing kérésekre origin ellenőrzés (kivéve Stripe webhook).
 - Rate limit a publikus regisztrációra és admin tömeges email küldésre.
 - SQLite `busy_timeout` + retry írásnál.
-- Napi automatikus backup éjfélkor (`data/backups`).
+- Automatikus SQLite backup óránként (`data/backups`, állítható perc alapú intervallummal).
 
 ## Technikai stack
 - Node.js (beépített `http` + `node:sqlite`)
@@ -151,6 +151,7 @@ SZAMLAZZ_REQUEST_TIMEOUT_MS=15000
 RETRY_PAYMENT_LINK_TTL_SECONDS=604800
 
 DB_BACKUP_ENABLED=true
+DB_BACKUP_INTERVAL_MINUTES=60
 DB_BACKUP_DIR=./data/backups
 DB_BACKUP_RETENTION_DAYS=30
 
