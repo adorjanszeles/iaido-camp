@@ -61,6 +61,17 @@
                   </table>
                 </div>
 
+                <div class="form-grid" style="margin-top: 0.8rem;">
+                  <div class="field">
+                    <label for="aam-threshold-eur">AAM threshold (EUR)</label>
+                    <input id="aam-threshold-eur" inputmode="decimal" min="0" />
+                    <p class="helper">
+                      If total paid registrations reach or exceed this amount, invoices switch from AAM to VAT automatically.
+                      Set 0 to disable automatic switch.
+                    </p>
+                  </div>
+                </div>
+
                 <div class="cta-row">
                   <button class="btn primary" id="save-pricing-btn" type="submit">Save pricing settings</button>
                 </div>
@@ -207,9 +218,21 @@
             <summary>Registrations</summary>
             <div class="accordion-content">
               <div class="form-grid" style="margin: 0 0 0.8rem;">
-                <div class="field full">
+                <div class="field">
                   <label for="registration-search">Filter by name or email</label>
                   <input id="registration-search" type="search" placeholder="Type a name or email..." autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label for="registration-status-filter">Filter by status</label>
+                  <select id="registration-status-filter">
+                    <option value="">All statuses</option>
+                    <option value="PENDING_PAYMENT">PENDING_PAYMENT</option>
+                    <option value="PAID">PAID</option>
+                    <option value="DELETED">DELETED</option>
+                    <option value="ANONYMIZED">ANONYMIZED</option>
+                  </select>
+                </div>
+                <div class="field full">
                   <p id="registration-search-meta" class="helper">Showing 0 registrations.</p>
                 </div>
               </div>

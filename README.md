@@ -47,6 +47,7 @@ Admin:
 - GDPR anonimizálás (`ANONYMIZED`).
 - CSV export.
 - Árazás módosítása adminból.
+- AAM keret beállítása adminból (EUR), automatikus AAM -> ÁFA váltással számlázáskor.
 - Kézi SQLite backup indítás.
 - Számla log nézet (Számlázz.hu kérés + válasz hibakereséshez).
 
@@ -138,9 +139,10 @@ STRIPE_CANCEL_URL=
 SZAMLAZZ_API_URL=https://www.szamlazz.hu/szamla/
 SZAMLAZZ_INVOICE_LANGUAGE=en
 SZAMLAZZ_PAYMENT_METHOD=Bankkártya
-SZAMLAZZ_AFAKULCS=0
+SZAMLAZZ_AFAKULCS=AAM
+SZAMLAZZ_AFAKULCS_OVER_LIMIT=27
 SZAMLAZZ_ESZAMLA=false
-SZAMLAZZ_SEND_EMAIL=false
+SZAMLAZZ_SEND_EMAIL=true
 SZAMLAZZ_SET_PAID=true
 SZAMLAZZ_COMMENT=Ishido Sensei - Summer Seminar 2026
 SZAMLAZZ_EXTERNAL_ID_PREFIX=camp-

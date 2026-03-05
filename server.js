@@ -152,9 +152,10 @@ const SZAMLAZZ_REQUEST_TIMEOUT_MS = (() => {
 })();
 const SZAMLAZZ_INVOICE_LANGUAGE = String(process.env.SZAMLAZZ_INVOICE_LANGUAGE || 'en').trim() || 'en';
 const SZAMLAZZ_PAYMENT_METHOD = String(process.env.SZAMLAZZ_PAYMENT_METHOD || 'Bankkártya').trim() || 'Bankkártya';
-const SZAMLAZZ_AFAKULCS = String(process.env.SZAMLAZZ_AFAKULCS || '0').trim() || '0';
+const SZAMLAZZ_AFAKULCS = String(process.env.SZAMLAZZ_AFAKULCS || 'AAM').trim() || 'AAM';
+const SZAMLAZZ_AFAKULCS_OVER_LIMIT = String(process.env.SZAMLAZZ_AFAKULCS_OVER_LIMIT || '27').trim() || '27';
 const SZAMLAZZ_ESZAMLA = String(process.env.SZAMLAZZ_ESZAMLA || 'false').trim().toLowerCase() === 'true';
-const SZAMLAZZ_SEND_EMAIL = String(process.env.SZAMLAZZ_SEND_EMAIL || 'false').trim().toLowerCase() === 'true';
+const SZAMLAZZ_SEND_EMAIL = String(process.env.SZAMLAZZ_SEND_EMAIL || 'true').trim().toLowerCase() === 'true';
 const SZAMLAZZ_SET_PAID = String(process.env.SZAMLAZZ_SET_PAID || 'true').trim().toLowerCase() !== 'false';
 const SZAMLAZZ_COMMENT = String(process.env.SZAMLAZZ_COMMENT || 'Ishido Sensei - Summer Seminar 2026').trim();
 const SZAMLAZZ_EXTERNAL_ID_PREFIX = String(process.env.SZAMLAZZ_EXTERNAL_ID_PREFIX || 'camp-').trim();
@@ -192,7 +193,12 @@ function buildDefaultPricingSettings() {
     }
   }
 
-  return { prices };
+  return {
+    prices,
+    invoicing: {
+      aamThresholdEur: 0
+    }
+  };
 }
 
 const DEFAULT_PRICING_SETTINGS = buildDefaultPricingSettings();
@@ -223,6 +229,13 @@ function normalizePricingSettings(rawSettings, fallbackSettings = DEFAULT_PRICIN
       normalized.prices[groupName][optionCode] = normalizeMoneyAmount(rawOption ?? fromLegacyObject ?? fallbackOption);
     }
   }
+
+  const rawThreshold = raw.invoicing?.aamThresholdEur;
+  const fallbackThreshold = fallback.invoicing?.aamThresholdEur ?? 0;
+  normalized.invoicing = {
+    aamThresholdEur: normalizeMoneyAmount(rawThreshold ?? fallbackThreshold)
+  };
+
   return normalized;
 }
 
@@ -901,6 +914,39 @@ function calculateVatBreakdown(grossAmount, vatKey) {
   return { net: gross, vat: 0, gross };
 }
 
+function getConfiguredAamThresholdEur(pricingSettings) {
+  const raw = Number(pricingSettings?.invoicing?.aamThresholdEur ?? 0);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return roundMoney(raw);
+}
+
+function getPaidRevenueTotalEur(db) {
+  const row = db
+    .prepare(`
+      SELECT COALESCE(SUM(amount_huf), 0) AS total
+      FROM registrations
+      WHERE status = 'PAID' OR COALESCE(paid_at, '') <> ''
+    `)
+    .get();
+  return roundMoney(Number(row?.total || 0));
+}
+
+function resolveSzamlazzVatKeyForInvoice(db, options = {}) {
+  const aamVatKey = String(options.aamVatKey || SZAMLAZZ_AFAKULCS).trim() || 'AAM';
+  const overLimitVatKey = String(options.overLimitVatKey || SZAMLAZZ_AFAKULCS_OVER_LIMIT).trim() || '27';
+  const aamThresholdEur = Number(options.aamThresholdEur || 0);
+  const normalizedThreshold = Number.isFinite(aamThresholdEur) && aamThresholdEur > 0 ? roundMoney(aamThresholdEur) : 0;
+  const paidRevenueEur = getPaidRevenueTotalEur(db);
+  const overLimit = normalizedThreshold > 0 && paidRevenueEur >= normalizedThreshold;
+
+  return {
+    vatKey: overLimit ? overLimitVatKey : aamVatKey,
+    overLimit,
+    paidRevenueEur,
+    aamThresholdEur: normalizedThreshold
+  };
+}
+
 function getRegistrationPackageLabel(registration) {
   const key = String(registration?.campType || '').trim();
   const base = PRICE_CATALOG.campType?.[key]?.label || 'Seminar package';
@@ -916,7 +962,7 @@ function buildSzamlazzInvoiceXml(registration, options = {}) {
     throw createError(400, 'Invalid registration amount for invoice creation.');
   }
 
-  const vatKey = String(options.vatKey || SZAMLAZZ_AFAKULCS).trim() || '0';
+  const vatKey = String(options.vatKey || SZAMLAZZ_AFAKULCS).trim() || 'AAM';
   const breakdown = calculateVatBreakdown(amount, vatKey);
   const description = String(options.description || getRegistrationPackageLabel(registration)).trim();
 
@@ -1163,10 +1209,14 @@ async function createInvoiceForRegistration(db, registrationId, options = {}) {
 
   const triggerSource = String(options.triggerSource || 'manual');
   const externalId = String(existing?.externalId || buildSzamlazzExternalId(registration.id)).trim();
+  const vatDecision = resolveSzamlazzVatKeyForInvoice(db, {
+    aamThresholdEur: options.aamThresholdEur
+  });
   const invoiceXml = buildSzamlazzInvoiceXml(registration, {
     externalId,
     invoiceDate: options.invoiceDate,
-    dueDate: options.dueDate
+    dueDate: options.dueDate,
+    vatKey: vatDecision.vatKey
   });
 
   try {
@@ -1213,7 +1263,7 @@ async function createInvoiceForRegistration(db, registrationId, options = {}) {
       throw error;
     }
 
-    const breakdown = calculateVatBreakdown(Number(registration.amount ?? registration.amountHuf ?? 0), SZAMLAZZ_AFAKULCS);
+    const breakdown = calculateVatBreakdown(Number(registration.amount ?? registration.amountHuf ?? 0), vatDecision.vatKey);
     await runWithSqliteRetry(() => upsertInvoiceRecord(db, {
       registrationId: registration.id,
       status: 'SUCCESS',
@@ -3845,7 +3895,10 @@ function createServer(options = {}) {
 
         if (syncResult.paid && isSzamlazzEnabled()) {
           try {
-            await createInvoiceForRegistration(db, syncResult.registrationId, { triggerSource: 'stripe_confirm' });
+            await createInvoiceForRegistration(db, syncResult.registrationId, {
+              triggerSource: 'stripe_confirm',
+              aamThresholdEur: getConfiguredAamThresholdEur(pricingSettings)
+            });
           } catch (invoiceError) {
             console.error(`Invoice creation failed for ${syncResult.registrationId}: ${invoiceError.message}`);
           }
@@ -3886,7 +3939,8 @@ function createServer(options = {}) {
         }
 
         const result = await createInvoiceForRegistration(db, registrationId, {
-          triggerSource: 'admin_manual'
+          triggerSource: 'admin_manual',
+          aamThresholdEur: getConfiguredAamThresholdEur(pricingSettings)
         });
 
         sendJson(res, result.created ? 201 : 200, {
@@ -3928,7 +3982,10 @@ function createServer(options = {}) {
             console.warn(`Stripe webhook ${eventType}: registration could not be resolved.`);
           } else if (syncResult.paid && isSzamlazzEnabled()) {
             try {
-              await createInvoiceForRegistration(db, syncResult.registrationId, { triggerSource: 'stripe_webhook' });
+              await createInvoiceForRegistration(db, syncResult.registrationId, {
+                triggerSource: 'stripe_webhook',
+                aamThresholdEur: getConfiguredAamThresholdEur(pricingSettings)
+              });
             } catch (invoiceError) {
               console.error(`Invoice creation failed for ${syncResult.registrationId}: ${invoiceError.message}`);
             }

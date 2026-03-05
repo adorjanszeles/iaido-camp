@@ -6,6 +6,7 @@
   const createBackupBtn = document.getElementById('create-backup-btn');
   const backupMessageEl = document.getElementById('backup-message');
   const pricingFormEl = document.getElementById('pricing-form');
+  const aamThresholdInputEl = document.getElementById('aam-threshold-eur');
   const pricingMessageEl = document.getElementById('pricing-message');
   const passwordFormEl = document.getElementById('admin-password-form');
   const passwordMessageEl = document.getElementById('password-message');
@@ -27,6 +28,7 @@
   const invoiceSearchEl = document.getElementById('invoice-search');
   const invoiceSearchMetaEl = document.getElementById('invoice-search-meta');
   const registrationSearchEl = document.getElementById('registration-search');
+  const registrationStatusFilterEl = document.getElementById('registration-status-filter');
   const registrationSearchMetaEl = document.getElementById('registration-search-meta');
   let allRegistrations = [];
   let allInvoices = [];
@@ -329,30 +331,35 @@
     updateInvoiceSearchMeta(filtered.length, allInvoices.length, query);
   }
 
-  function updateSearchMeta(visibleCount, totalCount, query) {
+  function updateSearchMeta(visibleCount, totalCount, query, statusFilter) {
     if (!registrationSearchMetaEl) return;
-    if (!query) {
+    if (!query && !statusFilter) {
       registrationSearchMetaEl.textContent = `Showing ${totalCount} registrations.`;
       return;
     }
 
-    registrationSearchMetaEl.textContent = `Showing ${visibleCount} of ${totalCount} registrations for "${query}".`;
+    const parts = [];
+    if (query) parts.push(`query "${query}"`);
+    if (statusFilter) parts.push(`status "${statusFilter}"`);
+    registrationSearchMetaEl.textContent = `Showing ${visibleCount} of ${totalCount} registrations for ${parts.join(' and ')}.`;
   }
 
   function filterRegistrations() {
     const query = String(registrationSearchEl?.value || '').trim();
     const normalized = query.toLowerCase();
+    const statusFilter = String(registrationStatusFilterEl?.value || '').trim();
 
-    const filtered = !normalized
-      ? allRegistrations
-      : allRegistrations.filter((item) => {
-        const fullName = String(item.fullName || '').toLowerCase();
-        const email = String(item.email || '').toLowerCase();
-        return fullName.includes(normalized) || email.includes(normalized);
-      });
+    const filtered = allRegistrations.filter((item) => {
+      const fullName = String(item.fullName || '').toLowerCase();
+      const email = String(item.email || '').toLowerCase();
+      const status = String(item.status || '').trim();
+      const matchesQuery = !normalized || fullName.includes(normalized) || email.includes(normalized);
+      const matchesStatus = !statusFilter || status === statusFilter;
+      return matchesQuery && matchesStatus;
+    });
 
-    renderRows(filtered, { hasFilter: normalized.length > 0 });
-    updateSearchMeta(filtered.length, allRegistrations.length, query);
+    renderRows(filtered, { hasFilter: normalized.length > 0 || Boolean(statusFilter) });
+    updateSearchMeta(filtered.length, allRegistrations.length, query, statusFilter);
   }
 
   function showPricingMessage(type, text) {
@@ -501,6 +508,11 @@
       input.value = Number.isFinite(Number(amount)) ? String(amount) : '';
     });
 
+    if (aamThresholdInputEl) {
+      const threshold = Number(settings?.invoicing?.aamThresholdEur ?? 0);
+      aamThresholdInputEl.value = Number.isFinite(threshold) ? String(threshold) : '0';
+    }
+
     showPricingMessage('ok', 'Pricing settings loaded.');
   }
 
@@ -511,6 +523,9 @@
 
     const prices = {
       campType: {}
+    };
+    const invoicing = {
+      aamThresholdEur: 0
     };
 
     const inputs = pricingFormEl.querySelectorAll('[data-price-group][data-price-code]');
@@ -527,7 +542,14 @@
       prices[group][code] = Math.round(numeric * 100) / 100;
     });
 
-    return { prices };
+    const thresholdRaw = String(aamThresholdInputEl?.value || '').trim();
+    const threshold = Number(thresholdRaw || 0);
+    if (!Number.isFinite(threshold) || threshold < 0) {
+      throw new Error('Invalid AAM threshold amount.');
+    }
+    invoicing.aamThresholdEur = Math.round(threshold * 100) / 100;
+
+    return { prices, invoicing };
   }
 
   async function savePricingSettings(event) {
@@ -623,7 +645,7 @@
       rowsEl.innerHTML = '<tr><td colspan="7">Failed to load data.</td></tr>';
       allRegistrations = [];
       allInvoices = [];
-      updateSearchMeta(0, 0, '');
+      updateSearchMeta(0, 0, '', '');
       updateInvoiceSearchMeta(0, 0, '');
       showPricingMessage('error', 'Failed to load pricing settings.');
       if (emailRecipientRowsEl) {
@@ -979,6 +1001,10 @@
 
   if (registrationSearchEl) {
     registrationSearchEl.addEventListener('input', filterRegistrations);
+  }
+
+  if (registrationStatusFilterEl) {
+    registrationStatusFilterEl.addEventListener('change', filterRegistrations);
   }
 
   if (invoiceSearchEl) {
