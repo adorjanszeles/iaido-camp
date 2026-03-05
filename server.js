@@ -212,6 +212,15 @@ const LEGACY_CAMP_TYPE_LABELS = {
   jodo: 'Jodo only (legacy)',
   both: 'Iaido + Jodo (legacy)'
 };
+const ATTENDANCE_DAY_OPTIONS = {
+  '2026-07-30': 'Day 1 - July 30, 2026 (Jodo)',
+  '2026-07-31': 'Day 2 - July 31, 2026 (Jodo)',
+  '2026-08-01': 'Day 3 - August 1, 2026 (Jodo + Iaido)',
+  '2026-08-02': 'Day 4 - August 2, 2026 (Iaido)',
+  '2026-08-03': 'Day 5 - August 3, 2026 (Iaido)'
+};
+const CAMP_TYPES_REQUIRING_ATTENDANCE_DAY = new Set(['one_day', 'one_and_half_days']);
+const HALF_DAY_FIXED_ATTENDANCE_DAY = '2026-08-01';
 const adminLoginFailures = new Map();
 const rateLimitBuckets = new Map();
 let ADMIN_SESSION_SECRET_RUNTIME = '';
@@ -501,6 +510,10 @@ function getCampTypeDisciplines(campType) {
   return CAMP_TYPE_DISCIPLINE_MATRIX[key] || { iaido: true, jodo: true };
 }
 
+function requiresAttendanceDay(campType) {
+  return CAMP_TYPES_REQUIRING_ATTENDANCE_DAY.has(String(campType || '').trim());
+}
+
 function calculatePricing(selection, pricingSettings = DEFAULT_PRICING_SETTINGS) {
   const campType = toEnumValue(selection.campType, pricingSettings.prices.campType, 'full_seminar');
   const mealPlan = toEnumValue(selection.mealPlan, pricingSettings.prices.mealPlan, 'none');
@@ -644,7 +657,7 @@ async function createStripeCheckoutSession(registration, options = {}) {
 
   const currency = String(registration.currency || 'EUR').toLowerCase();
   const amountMinor = toStripeMinorUnits(registration.amount ?? registration.amountHuf ?? 0, registration.currency || 'EUR');
-  const packageLabel = PRICE_CATALOG.campType?.[registration.campType]?.label || 'Seminar package';
+  const packageLabel = getRegistrationPackageLabel(registration);
   const successUrl = buildStripeSuccessUrl(String(options.successUrl || STRIPE_SUCCESS_URL).trim(), registration.id);
   const cancelUrl = String(options.cancelUrl || STRIPE_CANCEL_URL).trim();
 
@@ -656,6 +669,7 @@ async function createStripeCheckoutSession(registration, options = {}) {
     client_reference_id: registration.id,
     'metadata[registration_id]': registration.id,
     'metadata[source]': options.source || 'registration',
+    'metadata[attendance_day]': String(registration.attendanceDay || ''),
     'line_items[0][quantity]': 1,
     'line_items[0][price_data][currency]': currency,
     'line_items[0][price_data][unit_amount]': amountMinor,
@@ -1215,6 +1229,11 @@ function getCampTypeLabel(code) {
   return PRICE_CATALOG.campType?.[key]?.label || LEGACY_CAMP_TYPE_LABELS[key] || key || '-';
 }
 
+function getAttendanceDayLabel(code) {
+  const key = String(code || '').trim();
+  return ATTENDANCE_DAY_OPTIONS[key] || key || '-';
+}
+
 function applyEmailTemplateVariables(text, registration) {
   const input = String(text || '');
   const fullName = String(registration?.fullName || '').trim();
@@ -1361,7 +1380,11 @@ function calculateVatBreakdown(grossAmount, vatKey) {
 function getRegistrationPackageLabel(registration) {
   const key = String(registration?.campType || '').trim();
   const base = PRICE_CATALOG.campType?.[key]?.label || 'Seminar package';
-  return base;
+  const attendanceDay = String(registration?.attendanceDay || '').trim();
+  if (!attendanceDay) {
+    return base;
+  }
+  return `${base} - ${getAttendanceDayLabel(attendanceDay)}`;
 }
 
 function buildSzamlazzInvoiceXml(registration, options = {}) {
@@ -1963,6 +1986,7 @@ function initDatabase() {
       current_grade_iaido TEXT NOT NULL DEFAULT '',
       current_grade_jodo TEXT NOT NULL DEFAULT '',
       camp_type TEXT NOT NULL,
+      attendance_day TEXT NOT NULL DEFAULT '',
       meal_plan TEXT NOT NULL,
       accommodation TEXT NOT NULL,
       wants_exam INTEGER NOT NULL,
@@ -2050,6 +2074,9 @@ function ensureRegistrationColumns(db) {
 
   if (!columnNames.has('camp_type')) {
     db.exec("ALTER TABLE registrations ADD COLUMN camp_type TEXT NOT NULL DEFAULT 'full_seminar';");
+  }
+  if (!columnNames.has('attendance_day')) {
+    db.exec("ALTER TABLE registrations ADD COLUMN attendance_day TEXT NOT NULL DEFAULT '';");
   }
   if (!columnNames.has('meal_plan')) {
     db.exec("ALTER TABLE registrations ADD COLUMN meal_plan TEXT NOT NULL DEFAULT 'none';");
@@ -2167,12 +2194,12 @@ function migrateLegacyJsonIfNeeded(db) {
     INSERT INTO registrations (
       id, created_at, status, amount_huf, currency,
       full_name, email, phone, date_of_birth, city, current_grade, current_grade_iaido, current_grade_jodo,
-      camp_type, meal_plan, accommodation,
+      camp_type, attendance_day, meal_plan, accommodation,
       wants_exam, target_grade, wants_exam_iaido, target_grade_iaido, wants_exam_jodo, target_grade_jodo,
       billing_full_name, billing_zip, billing_city, billing_address, billing_country,
       food_notes, price_breakdown, privacy_consent, terms_consent,
       privacy_policy_version, terms_version, privacy_consent_at, terms_consent_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   db.exec('BEGIN');
@@ -2208,6 +2235,7 @@ function migrateLegacyJsonIfNeeded(db) {
         currentGradeIaido,
         currentGradeJodo,
         pricing.selection.campType,
+        '',
         pricing.selection.mealPlan,
         pricing.selection.accommodation,
         wantsExamCombined ? 1 : 0,
@@ -2269,6 +2297,7 @@ function mapRegistrationRow(row) {
     currentGradeJodo,
     currentGrade: currentGradeIaido || currentGradeJodo || row.current_grade || '',
     campType: row.camp_type || 'full_seminar',
+    attendanceDay: row.attendance_day || '',
     mealPlan: row.meal_plan || 'none',
     accommodation: row.accommodation || 'none',
     wantsExamIaido,
@@ -2461,14 +2490,14 @@ function insertRegistration(db, registration) {
     INSERT INTO registrations (
       id, created_at, status, amount_huf, currency,
       full_name, email, phone, date_of_birth, city, current_grade, current_grade_iaido, current_grade_jodo,
-      camp_type, meal_plan, accommodation,
+      camp_type, attendance_day, meal_plan, accommodation,
       wants_exam, target_grade, wants_exam_iaido, target_grade_iaido, wants_exam_jodo, target_grade_jodo,
       billing_full_name, billing_zip, billing_city, billing_address, billing_country,
       food_notes, price_breakdown,
       stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_last_event_type, stripe_last_event_at, paid_at,
       privacy_consent, terms_consent,
       privacy_policy_version, terms_version, privacy_consent_at, terms_consent_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   insert.run(
@@ -2486,6 +2515,7 @@ function insertRegistration(db, registration) {
     currentGradeIaido,
     currentGradeJodo,
     registration.campType,
+    registration.attendanceDay || '',
     registration.mealPlan,
     registration.accommodation,
     wantsExamCombined ? 1 : 0,
@@ -2729,6 +2759,10 @@ function sanitizePayload(payload, pricingSettings = DEFAULT_PRICING_SETTINGS) {
   const wantsExamIaido = Boolean(payload.wantsExamIaido ?? payload.wantsExam);
   const wantsExamJodo = Boolean(payload.wantsExamJodo);
   const campType = toEnumValue(payload.campType, pricingSettings.prices.campType, 'full_seminar');
+  const rawAttendanceDay = String(payload.attendanceDay || '').trim();
+  const attendanceDay = campType === 'half_day'
+    ? HALF_DAY_FIXED_ATTENDANCE_DAY
+    : (requiresAttendanceDay(campType) ? rawAttendanceDay : '');
   const mealPlan = toEnumValue(payload.mealPlan, pricingSettings.prices.mealPlan, 'none');
   const accommodation = toEnumValue(payload.accommodation, pricingSettings.prices.accommodation, 'none');
 
@@ -2741,6 +2775,7 @@ function sanitizePayload(payload, pricingSettings = DEFAULT_PRICING_SETTINGS) {
     currentGradeIaido: String(fallbackCurrentGradeIaido).trim(),
     currentGradeJodo: String(payload.currentGradeJodo || '').trim(),
     campType,
+    attendanceDay,
     mealPlan,
     accommodation,
     wantsExamIaido,
@@ -2778,6 +2813,16 @@ function validateRegistration(data, pricingSettings = DEFAULT_PRICING_SETTINGS) 
   }
   if (!Object.prototype.hasOwnProperty.call(pricingSettings.prices.campType, data.campType)) {
     errors.push('Invalid seminar selection.');
+  }
+  if (requiresAttendanceDay(data.campType)) {
+    if (!isNonEmptyString(data.attendanceDay)) {
+      errors.push('Please select the attendance day for this participation type.');
+    } else if (!Object.prototype.hasOwnProperty.call(ATTENDANCE_DAY_OPTIONS, String(data.attendanceDay || '').trim())) {
+      errors.push('Invalid attendance day selection.');
+    }
+  }
+  if (data.campType === 'half_day' && String(data.attendanceDay || '').trim() !== HALF_DAY_FIXED_ATTENDANCE_DAY) {
+    errors.push('Half-day participation is only available on the Iaido/Jodo transition day (Day 3).');
   }
   if (!Object.prototype.hasOwnProperty.call(pricingSettings.prices.mealPlan, data.mealPlan)) {
     errors.push('Invalid meal option.');
@@ -2901,6 +2946,7 @@ function buildCsvExport(registrations) {
     'current_grade_iaido',
     'current_grade_jodo',
     'camp_type',
+    'attendance_day',
     'meal_plan',
     'accommodation',
     'wants_exam_iaido',
@@ -2957,6 +3003,7 @@ function buildCsvExport(registrations) {
       registration.currentGradeIaido,
       registration.currentGradeJodo,
       registration.campType,
+      registration.attendanceDay,
       registration.mealPlan,
       registration.accommodation,
       registration.wantsExamIaido ? 'true' : 'false',

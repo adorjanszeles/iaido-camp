@@ -171,6 +171,22 @@
                 <option value="one_day">One day</option>
                 <option value="half_day">Half day</option>
               </select>
+              <p id="halfDayFixedNotice" class="helper" hidden>
+                Half-day participation is fixed to Day 3 (August 1, 2026), the Iaido/Jodo transition day.
+              </p>
+            </div>
+
+            <div class="field" id="attendanceDayWrap" hidden>
+              <label for="attendanceDay">Attendance day *</label>
+              <select id="attendanceDay" name="attendanceDay">
+                <option value="">Select day</option>
+                <option value="2026-07-30">Day 1 - July 30, 2026 (Jodo)</option>
+                <option value="2026-07-31">Day 2 - July 31, 2026 (Jodo)</option>
+                <option value="2026-08-01">Day 3 - August 1, 2026 (Jodo + Iaido)</option>
+                <option value="2026-08-02">Day 4 - August 2, 2026 (Iaido)</option>
+                <option value="2026-08-03">Day 5 - August 3, 2026 (Iaido)</option>
+              </select>
+              <p class="helper">Required for one-day and one-and-a-half-day participation.</p>
             </div>
           </div>
 

@@ -49,6 +49,13 @@
       iaido: 'Iaido only (legacy)',
       jodo: 'Jodo only (legacy)',
       both: 'Iaido + Jodo (legacy)'
+    },
+    attendanceDay: {
+      '2026-07-30': 'Day 1 - July 30, 2026 (Jodo)',
+      '2026-07-31': 'Day 2 - July 31, 2026 (Jodo)',
+      '2026-08-01': 'Day 3 - August 1, 2026 (Jodo + Iaido)',
+      '2026-08-02': 'Day 4 - August 2, 2026 (Iaido)',
+      '2026-08-03': 'Day 5 - August 3, 2026 (Iaido)'
     }
   };
 
@@ -129,7 +136,8 @@
     const examJodo = item.wantsExamJodo
       ? `Jodo exam: yes (${escapeHtml(item.targetGradeJodo || '-')})`
       : 'Jodo exam: no';
-    return `<span class="helper">${gradeIaido} | ${gradeJodo}<br />${examIaido} | ${examJodo}</span>`;
+    const attendanceDay = `Attendance day: ${escapeHtml(formatOption('attendanceDay', item.attendanceDay || '-'))}`;
+    return `<span class="helper">${gradeIaido} | ${gradeJodo}<br />${examIaido} | ${examJodo}<br />${attendanceDay}</span>`;
   }
 
   function renderDetailField(label, value) {
@@ -148,6 +156,7 @@
         ${renderDetailField('Created at', formatDateTime(item.createdAt))}
         ${renderDetailField('Status', item.status)}
         ${renderDetailField('Package', formatOption('campType', item.campType))}
+        ${renderDetailField('Attendance day', formatOption('attendanceDay', item.attendanceDay))}
         ${renderDetailField('Amount', formatCurrency(Number(item.amount ?? item.amountHuf ?? 0), item.currency || 'EUR'))}
         ${renderDetailField('Currency', item.currency || 'EUR')}
 
