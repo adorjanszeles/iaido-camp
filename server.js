@@ -168,8 +168,7 @@ const SZAMLAZZ_REQUEST_TIMEOUT_MS = (() => {
 })();
 const SZAMLAZZ_INVOICE_LANGUAGE = String(process.env.SZAMLAZZ_INVOICE_LANGUAGE || 'en').trim() || 'en';
 const SZAMLAZZ_PAYMENT_METHOD = String(process.env.SZAMLAZZ_PAYMENT_METHOD || 'Bankkártya').trim() || 'Bankkártya';
-const SZAMLAZZ_AFAKULCS = String(process.env.SZAMLAZZ_AFAKULCS || 'AAM').trim() || 'AAM';
-const SZAMLAZZ_AFAKULCS_OVER_LIMIT = String(process.env.SZAMLAZZ_AFAKULCS_OVER_LIMIT || '27').trim() || '27';
+const SZAMLAZZ_AFAKULCS = String(process.env.SZAMLAZZ_AFAKULCS || 'TAM').trim() || 'TAM';
 const SZAMLAZZ_ESZAMLA = String(process.env.SZAMLAZZ_ESZAMLA || 'false').trim().toLowerCase() === 'true';
 const SZAMLAZZ_SEND_EMAIL = String(process.env.SZAMLAZZ_SEND_EMAIL || 'true').trim().toLowerCase() === 'true';
 const SZAMLAZZ_SET_PAID = String(process.env.SZAMLAZZ_SET_PAID || 'true').trim().toLowerCase() !== 'false';
@@ -177,9 +176,12 @@ const SZAMLAZZ_COMMENT = String(process.env.SZAMLAZZ_COMMENT || 'Ishido Sensei -
 const SZAMLAZZ_EXTERNAL_ID_PREFIX = String(process.env.SZAMLAZZ_EXTERNAL_ID_PREFIX || 'camp-').trim();
 const PRICE_CATALOG = {
   campType: {
-    iaido: { label: 'Iaido seminar', defaultAmount: 149 },
-    jodo: { label: 'Jodo seminar', defaultAmount: 149 },
-    both: { label: 'Iaido + Jodo seminar', defaultAmount: 249 }
+    full_seminar: { label: 'Full seminar', defaultAmount: 249 },
+    jodo_part_only: { label: 'Jodo part only', defaultAmount: 149 },
+    iaido_part_only: { label: 'Iaido part only', defaultAmount: 149 },
+    one_and_half_days: { label: 'One and a half days', defaultAmount: 189 },
+    one_day: { label: 'One day', defaultAmount: 129 },
+    half_day: { label: 'Half day', defaultAmount: 79 }
   },
   mealPlan: {
     none: { label: 'No meal', defaultAmount: 0 },
@@ -191,6 +193,24 @@ const PRICE_CATALOG = {
     dojo: { label: 'Dojo accommodation', defaultAmount: 73 },
     guesthouse: { label: 'Guesthouse', defaultAmount: 135 }
   }
+};
+const CAMP_TYPE_DISCIPLINE_MATRIX = {
+  full_seminar: { iaido: true, jodo: true },
+  jodo_part_only: { iaido: false, jodo: true },
+  iaido_part_only: { iaido: true, jodo: false },
+  one_and_half_days: { iaido: true, jodo: true },
+  one_day: { iaido: true, jodo: true },
+  half_day: { iaido: true, jodo: true },
+
+  // Legacy values kept for backwards compatibility with older registrations.
+  iaido: { iaido: true, jodo: false },
+  jodo: { iaido: false, jodo: true },
+  both: { iaido: true, jodo: true }
+};
+const LEGACY_CAMP_TYPE_LABELS = {
+  iaido: 'Iaido only (legacy)',
+  jodo: 'Jodo only (legacy)',
+  both: 'Iaido + Jodo (legacy)'
 };
 const adminLoginFailures = new Map();
 const rateLimitBuckets = new Map();
@@ -210,10 +230,7 @@ function buildDefaultPricingSettings() {
   }
 
   return {
-    prices,
-    invoicing: {
-      aamThresholdEur: 0
-    }
+    prices
   };
 }
 
@@ -245,12 +262,6 @@ function normalizePricingSettings(rawSettings, fallbackSettings = DEFAULT_PRICIN
       normalized.prices[groupName][optionCode] = normalizeMoneyAmount(rawOption ?? fromLegacyObject ?? fallbackOption);
     }
   }
-
-  const rawThreshold = raw.invoicing?.aamThresholdEur;
-  const fallbackThreshold = fallback.invoicing?.aamThresholdEur ?? 0;
-  normalized.invoicing = {
-    aamThresholdEur: normalizeMoneyAmount(rawThreshold ?? fallbackThreshold)
-  };
 
   return normalized;
 }
@@ -485,8 +496,13 @@ function toEnumValue(value, allowedValues, fallbackValue) {
   return Object.prototype.hasOwnProperty.call(allowedValues, normalized) ? normalized : fallbackValue;
 }
 
+function getCampTypeDisciplines(campType) {
+  const key = String(campType || '').trim();
+  return CAMP_TYPE_DISCIPLINE_MATRIX[key] || { iaido: true, jodo: true };
+}
+
 function calculatePricing(selection, pricingSettings = DEFAULT_PRICING_SETTINGS) {
-  const campType = toEnumValue(selection.campType, pricingSettings.prices.campType, 'iaido');
+  const campType = toEnumValue(selection.campType, pricingSettings.prices.campType, 'full_seminar');
   const mealPlan = toEnumValue(selection.mealPlan, pricingSettings.prices.mealPlan, 'none');
   const accommodation = toEnumValue(selection.accommodation, pricingSettings.prices.accommodation, 'none');
   const currency = 'EUR';
@@ -1196,7 +1212,7 @@ function resolveAdminEmailTemplate(templateKey) {
 
 function getCampTypeLabel(code) {
   const key = String(code || '').trim();
-  return PRICE_CATALOG.campType?.[key]?.label || key || '-';
+  return PRICE_CATALOG.campType?.[key]?.label || LEGACY_CAMP_TYPE_LABELS[key] || key || '-';
 }
 
 function applyEmailTemplateVariables(text, registration) {
@@ -1342,39 +1358,6 @@ function calculateVatBreakdown(grossAmount, vatKey) {
   return { net: gross, vat: 0, gross };
 }
 
-function getConfiguredAamThresholdEur(pricingSettings) {
-  const raw = Number(pricingSettings?.invoicing?.aamThresholdEur ?? 0);
-  if (!Number.isFinite(raw) || raw <= 0) return 0;
-  return roundMoney(raw);
-}
-
-function getPaidRevenueTotalEur(db) {
-  const row = db
-    .prepare(`
-      SELECT COALESCE(SUM(amount_huf), 0) AS total
-      FROM registrations
-      WHERE status = 'PAID' OR COALESCE(paid_at, '') <> ''
-    `)
-    .get();
-  return roundMoney(Number(row?.total || 0));
-}
-
-function resolveSzamlazzVatKeyForInvoice(db, options = {}) {
-  const aamVatKey = String(options.aamVatKey || SZAMLAZZ_AFAKULCS).trim() || 'AAM';
-  const overLimitVatKey = String(options.overLimitVatKey || SZAMLAZZ_AFAKULCS_OVER_LIMIT).trim() || '27';
-  const aamThresholdEur = Number(options.aamThresholdEur || 0);
-  const normalizedThreshold = Number.isFinite(aamThresholdEur) && aamThresholdEur > 0 ? roundMoney(aamThresholdEur) : 0;
-  const paidRevenueEur = getPaidRevenueTotalEur(db);
-  const overLimit = normalizedThreshold > 0 && paidRevenueEur >= normalizedThreshold;
-
-  return {
-    vatKey: overLimit ? overLimitVatKey : aamVatKey,
-    overLimit,
-    paidRevenueEur,
-    aamThresholdEur: normalizedThreshold
-  };
-}
-
 function getRegistrationPackageLabel(registration) {
   const key = String(registration?.campType || '').trim();
   const base = PRICE_CATALOG.campType?.[key]?.label || 'Seminar package';
@@ -1390,7 +1373,7 @@ function buildSzamlazzInvoiceXml(registration, options = {}) {
     throw createError(400, 'Invalid registration amount for invoice creation.');
   }
 
-  const vatKey = String(options.vatKey || SZAMLAZZ_AFAKULCS).trim() || 'AAM';
+  const vatKey = String(options.vatKey || SZAMLAZZ_AFAKULCS).trim() || 'TAM';
   const breakdown = calculateVatBreakdown(amount, vatKey);
   const description = String(options.description || getRegistrationPackageLabel(registration)).trim();
 
@@ -1637,14 +1620,12 @@ async function createInvoiceForRegistration(db, registrationId, options = {}) {
 
   const triggerSource = String(options.triggerSource || 'manual');
   const externalId = String(existing?.externalId || buildSzamlazzExternalId(registration.id)).trim();
-  const vatDecision = resolveSzamlazzVatKeyForInvoice(db, {
-    aamThresholdEur: options.aamThresholdEur
-  });
+  const invoiceVatKey = String(options.vatKey || SZAMLAZZ_AFAKULCS).trim() || 'TAM';
   const invoiceXml = buildSzamlazzInvoiceXml(registration, {
     externalId,
     invoiceDate: options.invoiceDate,
     dueDate: options.dueDate,
-    vatKey: vatDecision.vatKey
+    vatKey: invoiceVatKey
   });
 
   try {
@@ -1691,7 +1672,7 @@ async function createInvoiceForRegistration(db, registrationId, options = {}) {
       throw error;
     }
 
-    const breakdown = calculateVatBreakdown(Number(registration.amount ?? registration.amountHuf ?? 0), vatDecision.vatKey);
+    const breakdown = calculateVatBreakdown(Number(registration.amount ?? registration.amountHuf ?? 0), invoiceVatKey);
     await runWithSqliteRetry(() => upsertInvoiceRecord(db, {
       registrationId: registration.id,
       status: 'SUCCESS',
@@ -2068,7 +2049,7 @@ function ensureRegistrationColumns(db) {
   const columnNames = new Set(columns.map((column) => column.name));
 
   if (!columnNames.has('camp_type')) {
-    db.exec("ALTER TABLE registrations ADD COLUMN camp_type TEXT NOT NULL DEFAULT 'iaido';");
+    db.exec("ALTER TABLE registrations ADD COLUMN camp_type TEXT NOT NULL DEFAULT 'full_seminar';");
   }
   if (!columnNames.has('meal_plan')) {
     db.exec("ALTER TABLE registrations ADD COLUMN meal_plan TEXT NOT NULL DEFAULT 'none';");
@@ -2198,7 +2179,7 @@ function migrateLegacyJsonIfNeeded(db) {
   try {
     for (const item of legacy) {
       const pricing = calculatePricing({
-        campType: item.campType || 'iaido',
+        campType: item.campType || 'full_seminar',
         mealPlan: item.mealPlan || 'none',
         accommodation: item.accommodation || 'none'
       });
@@ -2287,7 +2268,7 @@ function mapRegistrationRow(row) {
     currentGradeIaido,
     currentGradeJodo,
     currentGrade: currentGradeIaido || currentGradeJodo || row.current_grade || '',
-    campType: row.camp_type || 'iaido',
+    campType: row.camp_type || 'full_seminar',
     mealPlan: row.meal_plan || 'none',
     accommodation: row.accommodation || 'none',
     wantsExamIaido,
@@ -2747,7 +2728,7 @@ function sanitizePayload(payload, pricingSettings = DEFAULT_PRICING_SETTINGS) {
   const fallbackCurrentGradeIaido = payload.currentGradeIaido ?? payload.currentGrade ?? '';
   const wantsExamIaido = Boolean(payload.wantsExamIaido ?? payload.wantsExam);
   const wantsExamJodo = Boolean(payload.wantsExamJodo);
-  const campType = toEnumValue(payload.campType, pricingSettings.prices.campType, 'iaido');
+  const campType = toEnumValue(payload.campType, pricingSettings.prices.campType, 'full_seminar');
   const mealPlan = toEnumValue(payload.mealPlan, pricingSettings.prices.mealPlan, 'none');
   const accommodation = toEnumValue(payload.accommodation, pricingSettings.prices.accommodation, 'none');
 
@@ -2786,8 +2767,9 @@ function validateRegistration(data, pricingSettings = DEFAULT_PRICING_SETTINGS) 
   if (!isValidDateOfBirth(data.dateOfBirth)) errors.push('Date of birth format is invalid.');
   if (!isNonEmptyString(data.city)) errors.push('City is required.');
 
-  const needsIaidoGrade = data.campType === 'iaido' || data.campType === 'both' || data.wantsExamIaido;
-  const needsJodoGrade = data.campType === 'jodo' || data.campType === 'both' || data.wantsExamJodo;
+  const selectedCampDisciplines = getCampTypeDisciplines(data.campType);
+  const needsIaidoGrade = selectedCampDisciplines.iaido || data.wantsExamIaido;
+  const needsJodoGrade = selectedCampDisciplines.jodo || data.wantsExamJodo;
   if (needsIaidoGrade && !isNonEmptyString(data.currentGradeIaido)) {
     errors.push('Current Iaido grade is required for the selected option.');
   }
@@ -2828,11 +2810,11 @@ function validateRegistration(data, pricingSettings = DEFAULT_PRICING_SETTINGS) 
     errors.push('Jodo exam target grade must be exactly one level above the current Jodo grade.');
   }
 
-  if (data.wantsExamIaido && data.campType === 'jodo') {
-    errors.push('Iaido exam can only be selected with Iaido or Iaido + Jodo participation.');
+  if (data.wantsExamIaido && !selectedCampDisciplines.iaido) {
+    errors.push('Iaido exam can only be selected with a participation type that includes Iaido.');
   }
-  if (data.wantsExamJodo && data.campType === 'iaido') {
-    errors.push('Jodo exam can only be selected with Jodo or Iaido + Jodo participation.');
+  if (data.wantsExamJodo && !selectedCampDisciplines.jodo) {
+    errors.push('Jodo exam can only be selected with a participation type that includes Jodo.');
   }
 
   if (!isNonEmptyString(data.billingFullName)) errors.push('Billing full name is required.');
@@ -3463,7 +3445,7 @@ function serveFile(res, filePath) {
   });
 }
 
-function getStats(registrations, pricingSettings = DEFAULT_PRICING_SETTINGS) {
+function getStats(registrations) {
   const activeRegistrations = registrations.filter((r) => r.status !== 'DELETED' && r.status !== 'ANONYMIZED');
   const deletedCount = registrations.filter((r) => r.status === 'DELETED').length;
   const anonymizedCount = registrations.filter((r) => r.status === 'ANONYMIZED').length;
@@ -3476,43 +3458,14 @@ function getStats(registrations, pricingSettings = DEFAULT_PRICING_SETTINGS) {
   const projectedRevenueEur = activeRegistrations
     .filter((r) => !r.currency || String(r.currency).toUpperCase() === 'EUR')
     .reduce((sum, current) => sum + Number(current.amount ?? current.amountHuf ?? 0), 0);
-  const activeEurRegistrations = activeRegistrations
-    .filter((r) => !r.currency || String(r.currency).toUpperCase() === 'EUR')
-    .slice()
-    .sort((a, b) => {
-      const left = String(a.createdAt || '');
-      const right = String(b.createdAt || '');
-      if (left === right) {
-        return String(a.id || '').localeCompare(String(b.id || ''));
-      }
-      return left.localeCompare(right);
-    });
-  const aamThresholdEur = getConfiguredAamThresholdEur(pricingSettings);
-  let cumulativeEur = 0;
-  let aamGrossEur = 0;
-  let vatGrossEur = 0;
-  for (const registration of activeEurRegistrations) {
-    const amount = Number(registration.amount ?? registration.amountHuf ?? 0);
-    if (!Number.isFinite(amount) || amount <= 0) continue;
-    cumulativeEur += amount;
-
-    // Matches invoice-time rule: the invoice that reaches/exceeds threshold is already VAT.
-    if (aamThresholdEur > 0 && cumulativeEur >= aamThresholdEur) {
-      vatGrossEur += amount;
-    } else {
-      aamGrossEur += amount;
-    }
-  }
-  const vatBreakdown = calculateVatBreakdown(vatGrossEur, SZAMLAZZ_AFAKULCS_OVER_LIMIT);
-  const forecastVatAmountEur = Number(vatBreakdown.vat || 0);
 
   const byCampType = activeRegistrations.reduce((acc, current) => {
     acc[current.campType] = (acc[current.campType] || 0) + 1;
     return acc;
   }, {});
 
-  const iaidoApplicants = (byCampType.iaido || 0) + (byCampType.both || 0);
-  const jodoApplicants = (byCampType.jodo || 0) + (byCampType.both || 0);
+  const iaidoApplicants = activeRegistrations.filter((current) => getCampTypeDisciplines(current.campType).iaido).length;
+  const jodoApplicants = activeRegistrations.filter((current) => getCampTypeDisciplines(current.campType).jodo).length;
 
   const byCurrentGradeIaido = activeRegistrations.reduce((acc, current) => {
     if (!current.currentGradeIaido) return acc;
@@ -3555,11 +3508,6 @@ function getStats(registrations, pricingSettings = DEFAULT_PRICING_SETTINGS) {
     projectedRevenueByCurrency: { EUR: projectedRevenueEur },
     projectedRevenueHuf: 0,
     projectedRevenueEur,
-    aamThresholdEur,
-    aamGrossEur,
-    vatGrossEur,
-    forecastVatAmountEur,
-    vatRateKey: SZAMLAZZ_AFAKULCS_OVER_LIMIT,
     byCampType,
     iaidoApplicants,
     jodoApplicants,
@@ -3996,7 +3944,7 @@ function createServer(options = {}) {
         return;
       }
       const registrations = readRegistrations(db);
-      sendJson(res, 200, { stats: getStats(registrations, pricingSettings) });
+      sendJson(res, 200, { stats: getStats(registrations) });
       return;
     }
 
@@ -4359,8 +4307,7 @@ function createServer(options = {}) {
         if (syncResult.paid && isSzamlazzEnabled()) {
           try {
             await createInvoiceForRegistration(db, syncResult.registrationId, {
-              triggerSource: 'stripe_confirm',
-              aamThresholdEur: getConfiguredAamThresholdEur(pricingSettings)
+              triggerSource: 'stripe_confirm'
             });
           } catch (invoiceError) {
             console.error(`Invoice creation failed for ${syncResult.registrationId}: ${invoiceError.message}`);
@@ -4402,8 +4349,7 @@ function createServer(options = {}) {
         }
 
         const result = await createInvoiceForRegistration(db, registrationId, {
-          triggerSource: 'admin_manual',
-          aamThresholdEur: getConfiguredAamThresholdEur(pricingSettings)
+          triggerSource: 'admin_manual'
         });
 
         sendJson(res, result.created ? 201 : 200, {
@@ -4446,8 +4392,7 @@ function createServer(options = {}) {
           } else if (syncResult.paid && isSzamlazzEnabled()) {
             try {
               await createInvoiceForRegistration(db, syncResult.registrationId, {
-                triggerSource: 'stripe_webhook',
-                aamThresholdEur: getConfiguredAamThresholdEur(pricingSettings)
+                triggerSource: 'stripe_webhook'
               });
             } catch (invoiceError) {
               console.error(`Invoice creation failed for ${syncResult.registrationId}: ${invoiceError.message}`);

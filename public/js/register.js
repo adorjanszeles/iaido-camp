@@ -33,9 +33,12 @@
 
   const fallbackPricing = {
     campType: {
-      iaido: { label: 'Iaido seminar', amount: 149 },
-      jodo: { label: 'Jodo seminar', amount: 149 },
-      both: { label: 'Iaido + Jodo seminar', amount: 249 }
+      full_seminar: { label: 'Full seminar', amount: 249 },
+      jodo_part_only: { label: 'Jodo part only', amount: 149 },
+      iaido_part_only: { label: 'Iaido part only', amount: 149 },
+      one_and_half_days: { label: 'One and a half days', amount: 189 },
+      one_day: { label: 'One day', amount: 129 },
+      half_day: { label: 'Half day', amount: 79 }
     }
   };
 
@@ -158,8 +161,8 @@
   }
 
   function getPricingSelection() {
-    const campType = String(campTypeEl.value || 'iaido');
-    const lineItems = [{ code: campType, ...getOption('campType', campType, 'iaido') }];
+    const campType = String(campTypeEl.value || 'full_seminar');
+    const lineItems = [{ code: campType, ...getOption('campType', campType, 'full_seminar') }];
 
     const totalAmount = lineItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 

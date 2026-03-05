@@ -47,7 +47,6 @@ Admin:
 - GDPR anonimizálás (`ANONYMIZED`).
 - CSV export.
 - Árazás módosítása adminból.
-- AAM keret beállítása adminból (EUR), automatikus AAM -> ÁFA váltással számlázáskor.
 - Kézi SQLite backup indítás.
 - Számla log nézet (Számlázz.hu kérés + válasz hibakereséshez).
 
@@ -257,8 +256,7 @@ STRIPE_CANCEL_URL=
 SZAMLAZZ_API_URL=https://www.szamlazz.hu/szamla/
 SZAMLAZZ_INVOICE_LANGUAGE=en
 SZAMLAZZ_PAYMENT_METHOD=Bankkártya
-SZAMLAZZ_AFAKULCS=AAM
-SZAMLAZZ_AFAKULCS_OVER_LIMIT=27
+SZAMLAZZ_AFAKULCS=TAM
 SZAMLAZZ_ESZAMLA=true
 SZAMLAZZ_SEND_EMAIL=true
 SZAMLAZZ_SET_PAID=true

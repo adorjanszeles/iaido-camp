@@ -6,7 +6,6 @@
   const createBackupBtn = document.getElementById('create-backup-btn');
   const backupMessageEl = document.getElementById('backup-message');
   const pricingFormEl = document.getElementById('pricing-form');
-  const aamThresholdInputEl = document.getElementById('aam-threshold-eur');
   const pricingMessageEl = document.getElementById('pricing-message');
   const passwordFormEl = document.getElementById('admin-password-form');
   const passwordMessageEl = document.getElementById('password-message');
@@ -41,9 +40,15 @@
 
   const labels = {
     campType: {
-      iaido: 'Iaido',
-      jodo: 'Jodo',
-      both: 'Iaido + Jodo'
+      full_seminar: 'Full seminar',
+      jodo_part_only: 'Jodo part only',
+      iaido_part_only: 'Iaido part only',
+      one_and_half_days: 'One and a half days',
+      one_day: 'One day',
+      half_day: 'Half day',
+      iaido: 'Iaido only (legacy)',
+      jodo: 'Jodo only (legacy)',
+      both: 'Iaido + Jodo (legacy)'
     }
   };
 
@@ -67,10 +72,6 @@
 
   function renderStats(stats) {
     const projectedRevenue = Number(stats.projectedRevenueEur || 0);
-    const aamGross = Number(stats.aamGrossEur || 0);
-    const vatGross = Number(stats.vatGrossEur || 0);
-    const forecastVatAmount = Number(stats.forecastVatAmountEur || 0);
-    const vatRateKey = String(stats.vatRateKey || '').trim() || 'VAT';
 
     statsEl.innerHTML = [
       renderStatCard('Active registrations', stats.total),
@@ -80,10 +81,7 @@
       renderStatCard('Anonymized', stats.anonymizedCount || 0),
       renderStatCard('Iaido exam applicants', stats.wantsExamIaido || 0),
       renderStatCard('Jodo exam applicants', stats.wantsExamJodo || 0),
-      renderStatCard('Projected revenue (EUR)', formatCurrency(projectedRevenue, 'EUR')),
-      renderStatCard('AAM gross (EUR)', formatCurrency(aamGross, 'EUR')),
-      renderStatCard(`${vatRateKey} gross (EUR)`, formatCurrency(vatGross, 'EUR')),
-      renderStatCard('Forecast VAT amount (EUR)', formatCurrency(forecastVatAmount, 'EUR'))
+      renderStatCard('Projected revenue (EUR)', formatCurrency(projectedRevenue, 'EUR'))
     ].join('');
   }
 
@@ -515,11 +513,6 @@
       input.value = Number.isFinite(Number(amount)) ? String(amount) : '';
     });
 
-    if (aamThresholdInputEl) {
-      const threshold = Number(settings?.invoicing?.aamThresholdEur ?? 0);
-      aamThresholdInputEl.value = Number.isFinite(threshold) ? String(threshold) : '0';
-    }
-
     showPricingMessage('ok', 'Pricing settings loaded.');
   }
 
@@ -530,9 +523,6 @@
 
     const prices = {
       campType: {}
-    };
-    const invoicing = {
-      aamThresholdEur: 0
     };
 
     const inputs = pricingFormEl.querySelectorAll('[data-price-group][data-price-code]');
@@ -549,14 +539,7 @@
       prices[group][code] = Math.round(numeric * 100) / 100;
     });
 
-    const thresholdRaw = String(aamThresholdInputEl?.value || '').trim();
-    const threshold = Number(thresholdRaw || 0);
-    if (!Number.isFinite(threshold) || threshold < 0) {
-      throw new Error('Invalid AAM threshold amount.');
-    }
-    invoicing.aamThresholdEur = Math.round(threshold * 100) / 100;
-
-    return { prices, invoicing };
+    return { prices };
   }
 
   async function savePricingSettings(event) {
