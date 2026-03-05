@@ -66,6 +66,12 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v bash >/dev/null 2>&1; then
+  echo "Error: bash is not installed." >&2
+  exit 1
+fi
+BASH_BIN="$(command -v bash)"
+
 NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])')"
 if [[ "${NODE_MAJOR}" -lt 22 ]]; then
   echo "Error: Node 22+ is required. Current: $(node -v)" >&2
@@ -104,7 +110,7 @@ if pm2 describe "${APP_NAME}" >/dev/null 2>&1; then
 fi
 
 echo "Starting app with PM2..."
-pm2 start bash \
+pm2 start "${BASH_BIN}" \
   --name "${APP_NAME}" \
   --cwd "${APP_DIR}" \
   --time \
@@ -115,7 +121,6 @@ pm2 start bash \
   --restart-delay 5000 \
   --exp-backoff-restart-delay 200 \
   --kill-timeout 10000 \
-  --interpreter bash \
   -- -lc "${START_CMD}"
 
 echo "Configuring PM2 log rotation..."

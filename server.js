@@ -3164,7 +3164,7 @@ function buildRetryPaymentEmailMessage(registration, retryUrl, expiresAtIso) {
     textLines.push(`Link expires at: ${expiresAtText}`);
   }
 
-  textLines.push('', 'If you have any issue, please contact the Organizing Team using the email address on the Contact page.', '', 'Best regards,', 'Organizing Team');
+  textLines.push('', 'If you have any issue, please contact the Organizing Team at info@summerseminar2026.hu.', '', 'Best regards,', 'Organizing Team');
 
   const text = textLines.join('\n');
   const html = `
@@ -3176,7 +3176,7 @@ function buildRetryPaymentEmailMessage(registration, retryUrl, expiresAtIso) {
     <p><strong>Registration ID:</strong> ${escapeHtml(registrationId)}<br />
        <strong>Package:</strong> ${escapeHtml(packageLabel)}<br />
        <strong>Amount:</strong> ${escapeHtml(amount)}${expiresAtText ? `<br /><strong>Link expires at:</strong> ${escapeHtml(expiresAtText)}` : ''}</p>
-    <p>If you have any issue, please contact the Organizing Team using the email address on the Contact page.</p>
+    <p>If you have any issue, please contact the Organizing Team at <a href="mailto:info@summerseminar2026.hu">info@summerseminar2026.hu</a>.</p>
     <p>Best regards,<br />Organizing Team</p>
   `;
 
