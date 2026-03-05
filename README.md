@@ -51,7 +51,7 @@ Admin:
 - Kézi SQLite backup indítás.
 - Számla log nézet (Számlázz.hu kérés + válasz hibakereséshez).
 
-### Admin email küldés (Brevo)
+### Admin email küldés (SMTP)
 - Template alapú és egyedi email küldés.
 - Címzett módok:
   - kijelölt címzettek
@@ -77,7 +77,7 @@ Admin:
 - SQLite
 - Stripe API
 - Számlázz.hu XML Agent API
-- Brevo API
+- SMTP (POP3/SMTP szerverhez)
 - Vanilla HTML/CSS/JS frontend
 
 ## Futtatási követelmény
@@ -90,6 +90,54 @@ npm run dev
 ```
 
 Elérhető lesz: `http://localhost:3000`
+
+## Production env bootstrap
+```bash
+./scripts/create-production-env.sh
+```
+
+Ez létrehoz egy `.env.production` fájlt `summerseminar2026.hu` alapértékekkel.
+
+## Szerver telepítés és indítás
+
+Mit kell feltenni a szerverre:
+- teljes projekt mappa
+- kötelezően szükséges elemek:
+  - `server.js`
+  - `package.json`
+  - `package-lock.json`
+  - `public/`
+  - `scripts/create-production-env.sh`
+
+Telepítés:
+```bash
+git clone <repo-url> app
+cd app
+npm ci --omit=dev
+./scripts/create-production-env.sh
+```
+
+Ezután töltsd ki a `.env.production` fájlt (Stripe, SMTP, Számlázz.hu, admin jelszó).
+
+Indítás:
+```bash
+set -a; source .env.production; set +a
+npm run start
+```
+
+Javasolt éles futtatás PM2-vel:
+```bash
+npm i -g pm2
+set -a; source .env.production; set +a
+pm2 start npm --name ishido-camp -- run start
+pm2 save
+pm2 startup
+```
+
+Reverse proxy/domain beállítás:
+- `APP_BASE_URL=https://summerseminar2026.hu`
+- `TRUST_PROXY=true`
+- app futtatás pl. `127.0.0.1:3000` címen, Nginx/Caddy proxyval
 
 Lokális fejlesztéshez javasolt:
 ```bash
@@ -114,8 +162,13 @@ STRIPE_WEBHOOK_SECRET=...
 SZAMLAZZ_ENABLED=true
 SZAMLAZZ_AGENT_KEY=...
 
-EMAIL_PROVIDER=brevo
-BREVO_API_KEY=...
+EMAIL_PROVIDER=smtp
+SMTP_HOST=smtp.your-domain.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_REQUIRE_STARTTLS=true
+SMTP_USERNAME=...
+SMTP_PASSWORD=...
 EMAIL_FROM=no-reply@your-domain.com
 EMAIL_FROM_NAME=Ishido Sensei - Summer Seminar
 ```
@@ -141,7 +194,7 @@ SZAMLAZZ_INVOICE_LANGUAGE=en
 SZAMLAZZ_PAYMENT_METHOD=Bankkártya
 SZAMLAZZ_AFAKULCS=AAM
 SZAMLAZZ_AFAKULCS_OVER_LIMIT=27
-SZAMLAZZ_ESZAMLA=false
+SZAMLAZZ_ESZAMLA=true
 SZAMLAZZ_SEND_EMAIL=true
 SZAMLAZZ_SET_PAID=true
 SZAMLAZZ_COMMENT=Ishido Sensei - Summer Seminar 2026

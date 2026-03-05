@@ -465,8 +465,8 @@
     if (emailClearSelectionBtn) emailClearSelectionBtn.disabled = !selectionEnabled;
     if (emailSelectAllBtn) emailSelectAllBtn.disabled = !selectionEnabled;
 
-    if (emailCapabilities.provider !== 'brevo') {
-      showEmailMessage('error', 'Email provider is not configured. Set Brevo env values first.');
+    if (emailCapabilities.provider === 'disabled') {
+      showEmailMessage('error', 'Email provider is not configured. Set SMTP env values first.');
       return;
     }
 
@@ -639,8 +639,8 @@
       allInvoices = Array.isArray(invoicesData.invoices) ? invoicesData.invoices : [];
       filterInvoices();
 
-      if (emailCapabilities.provider !== 'brevo') {
-        showEmailMessage('error', 'Email provider is not configured. Set Brevo env values first.');
+      if (emailCapabilities.provider === 'disabled') {
+        showEmailMessage('error', 'Email provider is not configured. Set SMTP env values first.');
         if (sendEmailBtn) {
           sendEmailBtn.disabled = true;
         }

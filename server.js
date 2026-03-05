@@ -1,6 +1,9 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
+const tls = require('tls');
+const os = require('os');
 const { randomUUID, randomBytes, createHmac, timingSafeEqual, scryptSync } = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 
@@ -73,7 +76,17 @@ const SQLITE_BUSY_TIMEOUT_MS = 5000;
 const SQLITE_RETRY_MAX_ATTEMPTS = 5;
 const SQLITE_RETRY_BASE_DELAY_MS = 120;
 const EMAIL_PROVIDER = String(process.env.EMAIL_PROVIDER || '').trim().toLowerCase();
-const BREVO_API_KEY = String(process.env.BREVO_API_KEY || '').trim();
+const SMTP_HOST = String(process.env.SMTP_HOST || '').trim();
+const SMTP_PORT = (() => {
+  const raw = Number(process.env.SMTP_PORT || 587);
+  return Number.isFinite(raw) && raw >= 1 && raw <= 65535 ? Math.floor(raw) : 587;
+})();
+const SMTP_SECURE = String(process.env.SMTP_SECURE || 'false').trim().toLowerCase() === 'true';
+const SMTP_REQUIRE_STARTTLS = String(process.env.SMTP_REQUIRE_STARTTLS || 'true').trim().toLowerCase() !== 'false';
+const SMTP_USERNAME = String(process.env.SMTP_USERNAME || '').trim();
+const SMTP_PASSWORD = String(process.env.SMTP_PASSWORD || '').trim();
+const SMTP_HELO_NAME = String(process.env.SMTP_HELO_NAME || os.hostname() || 'localhost').trim() || 'localhost';
+const SMTP_TLS_REJECT_UNAUTHORIZED = String(process.env.SMTP_TLS_REJECT_UNAUTHORIZED || 'true').trim().toLowerCase() !== 'false';
 const EMAIL_FROM = String(process.env.EMAIL_FROM || '').trim();
 const EMAIL_FROM_NAME = String(process.env.EMAIL_FROM_NAME || 'Ishido Sensei - Summer Seminar').trim();
 const ADMIN_NOTIFY_EMAIL = String(process.env.ADMIN_NOTIFY_EMAIL || '').trim();
@@ -81,7 +94,6 @@ const ADMIN_EMAIL_MAX_RECIPIENTS = (() => {
   const raw = Number(process.env.ADMIN_EMAIL_MAX_RECIPIENTS || 500);
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 500;
 })();
-const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
 const EMAIL_REQUEST_TIMEOUT_MS = 8000;
 const APP_SETTING_KEY_PRICING = 'pricing_settings_v1';
 const APP_SETTING_KEY_ADMIN_AUTH = 'admin_auth_v1';
@@ -711,49 +723,461 @@ async function getStripeCheckoutSession(sessionId) {
   return payload;
 }
 
-function isBrevoEnabled() {
-  return EMAIL_PROVIDER === 'brevo' && BREVO_API_KEY.length > 0 && EMAIL_FROM.length > 0;
+function hasValidSmtpAuthConfig() {
+  const hasUsername = SMTP_USERNAME.length > 0;
+  const hasPassword = SMTP_PASSWORD.length > 0;
+  return (hasUsername && hasPassword) || (!hasUsername && !hasPassword);
 }
 
-async function sendBrevoEmail({ toEmail, toName, subject, htmlContent, textContent }) {
-  const payload = {
-    sender: {
-      email: EMAIL_FROM,
-      name: EMAIL_FROM_NAME
-    },
-    to: [
-      {
-        email: toEmail,
-        name: toName || ''
+function isSmtpEnabled() {
+  return EMAIL_PROVIDER === 'smtp' && SMTP_HOST.length > 0 && EMAIL_FROM.length > 0 && hasValidSmtpAuthConfig();
+}
+
+function getEmailProvider() {
+  return isSmtpEnabled() ? 'smtp' : 'disabled';
+}
+
+function encodeMimeHeaderValue(value) {
+  const normalized = String(value || '').replace(/[\r\n]+/g, ' ').trim();
+  if (!normalized) return '';
+  if (/^[\x20-\x7E]+$/.test(normalized)) {
+    return normalized;
+  }
+  return `=?UTF-8?B?${Buffer.from(normalized, 'utf8').toString('base64')}?=`;
+}
+
+function formatSmtpAddressHeader(name, email) {
+  const safeEmail = String(email || '').trim().replace(/[\r\n<>]+/g, '');
+  if (!safeEmail) return '';
+  const safeName = String(name || '').trim();
+  if (!safeName) return `<${safeEmail}>`;
+  return `${encodeMimeHeaderValue(safeName)} <${safeEmail}>`;
+}
+
+function normalizeEmailBody(value) {
+  return String(value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function encodeMimeBase64(value) {
+  return Buffer.from(String(value || ''), 'utf8')
+    .toString('base64')
+    .replace(/.{1,76}/g, '$&\r\n')
+    .trimEnd();
+}
+
+function buildSmtpMessageData({ toEmail, toName, subject, htmlContent, textContent }) {
+  const safeToEmail = String(toEmail || '').trim().replace(/[\r\n<>]+/g, '');
+  const safeSubject = encodeMimeHeaderValue(subject || '');
+  const fromHeader = formatSmtpAddressHeader(EMAIL_FROM_NAME, EMAIL_FROM);
+  const toHeader = formatSmtpAddressHeader(toName || '', safeToEmail);
+  const messageIdHost = SMTP_HELO_NAME.replace(/[^a-zA-Z0-9.-]/g, '') || 'localhost';
+  const messageId = `<${randomUUID()}@${messageIdHost}>`;
+  const dateHeader = new Date().toUTCString();
+  const text = normalizeEmailBody(textContent || '');
+  const html = normalizeEmailBody(htmlContent || '');
+
+  const headers = [
+    `From: ${fromHeader}`,
+    `To: ${toHeader}`,
+    `Subject: ${safeSubject}`,
+    `Date: ${dateHeader}`,
+    `Message-ID: ${messageId}`,
+    'MIME-Version: 1.0'
+  ];
+
+  if (html.trim()) {
+    const boundary = `alt-${randomUUID().replace(/-/g, '')}`;
+    headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+    const body = [
+      `--${boundary}`,
+      'Content-Type: text/plain; charset="UTF-8"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      encodeMimeBase64(text || ' '),
+      '',
+      `--${boundary}`,
+      'Content-Type: text/html; charset="UTF-8"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      encodeMimeBase64(html),
+      '',
+      `--${boundary}--`
+    ].join('\r\n');
+    return `${headers.join('\r\n')}\r\n\r\n${body}\r\n`;
+  }
+
+  headers.push('Content-Type: text/plain; charset="UTF-8"');
+  headers.push('Content-Transfer-Encoding: base64');
+  const plainBody = encodeMimeBase64(text || ' ');
+  return `${headers.join('\r\n')}\r\n\r\n${plainBody}\r\n`;
+}
+
+function dotStuffSmtpData(data) {
+  const normalized = String(data || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const lines = normalized.split('\n').map((line) => (line.startsWith('.') ? `.${line}` : line));
+  return `${lines.join('\r\n')}\r\n.\r\n`;
+}
+
+function createSmtpLineReader(socket) {
+  let buffer = '';
+  let closed = false;
+  const queue = [];
+  const waiters = [];
+
+  function cleanup() {
+    socket.off('data', onData);
+    socket.off('error', onError);
+    socket.off('close', onClose);
+    socket.off('end', onEnd);
+  }
+
+  function rejectAll(error) {
+    while (waiters.length > 0) {
+      const current = waiters.shift();
+      clearTimeout(current.timeoutId);
+      current.reject(error);
+    }
+  }
+
+  function pushLine(line) {
+    if (waiters.length > 0) {
+      const current = waiters.shift();
+      clearTimeout(current.timeoutId);
+      current.resolve(line);
+      return;
+    }
+    queue.push(line);
+  }
+
+  function flushBuffer() {
+    let idx = buffer.indexOf('\n');
+    while (idx >= 0) {
+      const rawLine = buffer.slice(0, idx + 1);
+      buffer = buffer.slice(idx + 1);
+      pushLine(rawLine.replace(/\r?\n$/, ''));
+      idx = buffer.indexOf('\n');
+    }
+  }
+
+  function onData(chunk) {
+    buffer += chunk.toString('utf8');
+    flushBuffer();
+  }
+
+  function onError(error) {
+    if (closed) return;
+    closed = true;
+    cleanup();
+    rejectAll(error || new Error('SMTP socket error'));
+  }
+
+  function onClose() {
+    if (closed) return;
+    closed = true;
+    cleanup();
+    rejectAll(new Error('SMTP connection closed'));
+  }
+
+  function onEnd() {
+    if (closed) return;
+    closed = true;
+    cleanup();
+    rejectAll(new Error('SMTP connection ended'));
+  }
+
+  socket.on('data', onData);
+  socket.on('error', onError);
+  socket.on('close', onClose);
+  socket.on('end', onEnd);
+
+  return {
+    nextLine(timeoutMs = EMAIL_REQUEST_TIMEOUT_MS) {
+      if (queue.length > 0) {
+        return Promise.resolve(queue.shift());
       }
-    ],
+
+      return new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          const index = waiters.findIndex((item) => item.reject === reject);
+          if (index >= 0) waiters.splice(index, 1);
+          reject(new Error('SMTP response timeout'));
+        }, timeoutMs);
+        waiters.push({ resolve, reject, timeoutId });
+      });
+    },
+    detach() {
+      cleanup();
+      rejectAll(new Error('SMTP reader detached'));
+    }
+  };
+}
+
+async function readSmtpResponse(reader) {
+  const lines = [];
+  let code = null;
+  while (true) {
+    const line = await reader.nextLine();
+    if (!String(line || '').trim()) continue;
+    const match = /^(\d{3})([ -])(.*)$/.exec(line);
+    if (!match) {
+      throw new Error(`Invalid SMTP response line: ${line}`);
+    }
+    const currentCode = Number(match[1]);
+    code = code ?? currentCode;
+    lines.push(line);
+    if (match[2] === ' ') {
+      return {
+        code,
+        lines,
+        message: lines.map((item) => item.replace(/^\d{3}[ -]/, '')).join(' | ')
+      };
+    }
+  }
+}
+
+function parseSmtpCapabilities(response) {
+  if (!response || !Array.isArray(response.lines)) return [];
+  return response.lines
+    .map((line) => line.replace(/^\d{3}[ -]/, '').trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function smtpSupportsAuthMethod(capabilities, method) {
+  const upperMethod = String(method || '').toUpperCase();
+  return capabilities.some((line) => {
+    if (!line.startsWith('AUTH')) return false;
+    return line.split(/\s+/).includes(upperMethod);
+  });
+}
+
+function smtpHasCapability(capabilities, capability) {
+  const upper = String(capability || '').toUpperCase();
+  return capabilities.some((line) => line === upper || line.startsWith(`${upper} `));
+}
+
+function sendSmtpCommand(socket, command) {
+  return new Promise((resolve, reject) => {
+    socket.write(`${command}\r\n`, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function sendSmtpRaw(socket, payload) {
+  return new Promise((resolve, reject) => {
+    socket.write(payload, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function expectSmtpCode(response, acceptedCodes, context) {
+  const accepted = Array.isArray(acceptedCodes) ? acceptedCodes : [acceptedCodes];
+  if (!accepted.includes(Number(response?.code || 0))) {
+    const details = String(response?.message || 'Unexpected SMTP response');
+    throw new Error(`${context} failed (${response?.code || 'n/a'}): ${details}`);
+  }
+}
+
+function sanitizeSmtpEnvelopeAddress(email) {
+  const safe = String(email || '').trim().replace(/[\r\n<>]+/g, '');
+  if (!isValidEmail(safe)) {
+    throw new Error(`Invalid email address: ${email}`);
+  }
+  return safe;
+}
+
+async function upgradeSocketToTls(socket) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      secureSocket.destroy();
+      reject(new Error('SMTP STARTTLS handshake timeout'));
+    }, EMAIL_REQUEST_TIMEOUT_MS);
+
+    const secureSocket = tls.connect({
+      socket,
+      servername: SMTP_HOST,
+      rejectUnauthorized: SMTP_TLS_REJECT_UNAUTHORIZED
+    }, () => {
+      clearTimeout(timer);
+      resolve(secureSocket);
+    });
+
+    secureSocket.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+async function authenticateSmtp(socket, reader, capabilities) {
+  const hasUsername = SMTP_USERNAME.length > 0;
+  const hasPassword = SMTP_PASSWORD.length > 0;
+  if (!hasUsername && !hasPassword) return;
+  if (!hasUsername || !hasPassword) {
+    throw new Error('SMTP auth configuration is incomplete. Set both SMTP username and SMTP password.');
+  }
+
+  if (smtpSupportsAuthMethod(capabilities, 'PLAIN')) {
+    const token = Buffer.from(`\u0000${SMTP_USERNAME}\u0000${SMTP_PASSWORD}`, 'utf8').toString('base64');
+    await sendSmtpCommand(socket, `AUTH PLAIN ${token}`);
+    const authResponse = await readSmtpResponse(reader);
+    expectSmtpCode(authResponse, 235, 'SMTP AUTH PLAIN');
+    return;
+  }
+
+  if (smtpSupportsAuthMethod(capabilities, 'LOGIN') || capabilities.some((line) => line.startsWith('AUTH'))) {
+    await sendSmtpCommand(socket, 'AUTH LOGIN');
+    const loginPrompt = await readSmtpResponse(reader);
+    expectSmtpCode(loginPrompt, 334, 'SMTP AUTH LOGIN');
+
+    await sendSmtpCommand(socket, Buffer.from(SMTP_USERNAME, 'utf8').toString('base64'));
+    const passwordPrompt = await readSmtpResponse(reader);
+    expectSmtpCode(passwordPrompt, 334, 'SMTP AUTH LOGIN username');
+
+    await sendSmtpCommand(socket, Buffer.from(SMTP_PASSWORD, 'utf8').toString('base64'));
+    const done = await readSmtpResponse(reader);
+    expectSmtpCode(done, 235, 'SMTP AUTH LOGIN password');
+    return;
+  }
+
+  throw new Error('SMTP server does not advertise a supported AUTH method (PLAIN/LOGIN).');
+}
+
+function createSmtpSocket() {
+  return new Promise((resolve, reject) => {
+    let socket = null;
+    const timer = setTimeout(() => {
+      if (socket) socket.destroy();
+      reject(new Error('SMTP connection timeout'));
+    }, EMAIL_REQUEST_TIMEOUT_MS);
+
+    const onError = (error) => {
+      clearTimeout(timer);
+      reject(error);
+    };
+
+    const options = {
+      host: SMTP_HOST,
+      port: SMTP_PORT
+    };
+    socket = SMTP_SECURE
+      ? tls.connect({
+        ...options,
+        servername: SMTP_HOST,
+        rejectUnauthorized: SMTP_TLS_REJECT_UNAUTHORIZED
+      }, () => {
+        clearTimeout(timer);
+        socket.off('error', onError);
+        resolve(socket);
+      })
+      : net.connect(options, () => {
+        clearTimeout(timer);
+        socket.off('error', onError);
+        resolve(socket);
+      });
+
+    socket.once('error', onError);
+  });
+}
+
+async function sendSmtpEmail({ toEmail, toName, subject, htmlContent, textContent }) {
+  if (!isSmtpEnabled()) {
+    throw new Error('SMTP is not configured.');
+  }
+
+  const recipient = sanitizeSmtpEnvelopeAddress(toEmail);
+  const sender = sanitizeSmtpEnvelopeAddress(EMAIL_FROM);
+  const messageData = buildSmtpMessageData({
+    toEmail: recipient,
+    toName,
     subject,
     htmlContent,
     textContent
-  };
-
-  const response = await fetch(BREVO_API_URL, {
-    method: 'POST',
-    headers: {
-      accept: 'application/json',
-      'content-type': 'application/json',
-      'api-key': BREVO_API_KEY
-    },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(EMAIL_REQUEST_TIMEOUT_MS)
   });
 
-  if (!response.ok) {
-    let details = '';
-    try {
-      details = await response.text();
-    } catch {
-      details = '';
-    }
-    throw new Error(`Brevo send failed (${response.status}): ${details}`);
-  }
+  let socket = null;
+  let reader = null;
+  try {
+    socket = await createSmtpSocket();
+    reader = createSmtpLineReader(socket);
 
-  return response.json().catch(() => ({}));
+    const greeting = await readSmtpResponse(reader);
+    expectSmtpCode(greeting, 220, 'SMTP greeting');
+
+    await sendSmtpCommand(socket, `EHLO ${SMTP_HELO_NAME}`);
+    let ehlo = await readSmtpResponse(reader);
+    let capabilities = parseSmtpCapabilities(ehlo);
+    if (ehlo.code !== 250) {
+      await sendSmtpCommand(socket, `HELO ${SMTP_HELO_NAME}`);
+      const helo = await readSmtpResponse(reader);
+      expectSmtpCode(helo, 250, 'SMTP HELO');
+      capabilities = [];
+    }
+
+    if (!SMTP_SECURE && SMTP_REQUIRE_STARTTLS) {
+      if (!smtpHasCapability(capabilities, 'STARTTLS')) {
+        throw new Error('SMTP STARTTLS is required but not supported by the server.');
+      }
+
+      await sendSmtpCommand(socket, 'STARTTLS');
+      const startTls = await readSmtpResponse(reader);
+      expectSmtpCode(startTls, 220, 'SMTP STARTTLS');
+
+      reader.detach();
+      socket = await upgradeSocketToTls(socket);
+      reader = createSmtpLineReader(socket);
+
+      await sendSmtpCommand(socket, `EHLO ${SMTP_HELO_NAME}`);
+      ehlo = await readSmtpResponse(reader);
+      expectSmtpCode(ehlo, 250, 'SMTP EHLO after STARTTLS');
+      capabilities = parseSmtpCapabilities(ehlo);
+    }
+
+    await authenticateSmtp(socket, reader, capabilities);
+
+    await sendSmtpCommand(socket, `MAIL FROM:<${sender}>`);
+    const mailFrom = await readSmtpResponse(reader);
+    expectSmtpCode(mailFrom, 250, 'SMTP MAIL FROM');
+
+    await sendSmtpCommand(socket, `RCPT TO:<${recipient}>`);
+    const rcptTo = await readSmtpResponse(reader);
+    expectSmtpCode(rcptTo, [250, 251], 'SMTP RCPT TO');
+
+    await sendSmtpCommand(socket, 'DATA');
+    const dataReady = await readSmtpResponse(reader);
+    expectSmtpCode(dataReady, 354, 'SMTP DATA');
+
+    await sendSmtpRaw(socket, dotStuffSmtpData(messageData));
+    const accepted = await readSmtpResponse(reader);
+    expectSmtpCode(accepted, 250, 'SMTP message submit');
+
+    try {
+      await sendSmtpCommand(socket, 'QUIT');
+      await readSmtpResponse(reader);
+    } catch {
+      // Best effort QUIT only.
+    }
+
+    return { provider: 'smtp', accepted: true };
+  } catch (error) {
+    throw new Error(`SMTP send failed: ${error.message || 'unknown error'}`);
+  } finally {
+    if (reader) {
+      reader.detach();
+    }
+    if (socket) {
+      socket.destroy();
+    }
+  }
 }
 
 function listAdminEmailTemplates() {
@@ -1398,13 +1822,13 @@ function buildRegistrationEmailContent(registration, pricing) {
 }
 
 async function sendRegistrationEmails(registration, pricing) {
-  if (!isBrevoEnabled()) {
+  if (!isSmtpEnabled()) {
     return { enabled: false, sent: 0 };
   }
 
   const messages = buildRegistrationEmailContent(registration, pricing);
   const tasks = [
-    sendBrevoEmail({
+    sendSmtpEmail({
       toEmail: registration.email,
       toName: registration.fullName,
       subject: messages.participant.subject,
@@ -1415,7 +1839,7 @@ async function sendRegistrationEmails(registration, pricing) {
 
   if (ADMIN_NOTIFY_EMAIL) {
     tasks.push(
-      sendBrevoEmail({
+      sendSmtpEmail({
         toEmail: ADMIN_NOTIFY_EMAIL,
         toName: 'Admin',
         subject: messages.admin.subject,
@@ -2731,15 +3155,15 @@ function buildRetryPaymentEmailMessage(registration, retryUrl, expiresAtIso) {
 }
 
 async function sendRetryPaymentEmail(registration) {
-  if (!isBrevoEnabled()) {
-    throw createError(503, 'Email sending is not configured. Set Brevo env values first.');
+  if (!isSmtpEnabled()) {
+    throw createError(503, 'Email sending is not configured. Set SMTP env values first.');
   }
 
   const retry = buildRetryPaymentToken(registration.id);
   const retryUrl = buildRetryPaymentUrl(retry.token);
   const message = buildRetryPaymentEmailMessage(registration, retryUrl, retry.expiresAt);
 
-  await sendBrevoEmail({
+  await sendSmtpEmail({
     toEmail: registration.email,
     toName: registration.fullName,
     subject: message.subject,
@@ -3268,7 +3692,7 @@ function createServer(options = {}) {
       sendJson(res, 200, {
         templates: listAdminEmailTemplates(),
         capabilities: {
-          provider: isBrevoEnabled() ? 'brevo' : 'disabled',
+          provider: getEmailProvider(),
           maxRecipients: ADMIN_EMAIL_MAX_RECIPIENTS
         }
       });
@@ -3280,8 +3704,8 @@ function createServer(options = {}) {
         sendJson(res, 401, { error: 'Admin login required.' });
         return;
       }
-      if (!isBrevoEnabled()) {
-        sendJson(res, 503, { error: 'Email sending is not configured. Set Brevo env values first.' });
+      if (!isSmtpEnabled()) {
+        sendJson(res, 503, { error: 'Email sending is not configured. Set SMTP env values first.' });
         return;
       }
 
@@ -3365,7 +3789,7 @@ function createServer(options = {}) {
           }
 
           try {
-            await sendBrevoEmail({
+            await sendSmtpEmail({
               toEmail: registration.email,
               toName: registration.fullName,
               subject: renderedSubject,
@@ -3682,8 +4106,8 @@ function createServer(options = {}) {
         sendJson(res, 503, { error: 'Stripe is not configured. Set STRIPE_SECRET_KEY first.' });
         return;
       }
-      if (!isBrevoEnabled()) {
-        sendJson(res, 503, { error: 'Email sending is not configured. Set Brevo env values first.' });
+      if (!isSmtpEnabled()) {
+        sendJson(res, 503, { error: 'Email sending is not configured. Set SMTP env values first.' });
         return;
       }
 
@@ -3844,8 +4268,8 @@ function createServer(options = {}) {
           registrationId: newRegistration.id,
           pricing,
           email: {
-            provider: isBrevoEnabled() ? 'brevo' : 'disabled',
-            status: isBrevoEnabled() ? 'QUEUED' : 'DISABLED'
+            provider: getEmailProvider(),
+            status: isSmtpEnabled() ? 'QUEUED' : 'DISABLED'
           },
           compliance: {
             privacyPolicyVersion: PRIVACY_POLICY_VERSION,
