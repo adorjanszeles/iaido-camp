@@ -139,6 +139,71 @@ Reverse proxy/domain beállítás:
 - `TRUST_PROXY=true`
 - app futtatás pl. `127.0.0.1:3000` címen, Nginx/Caddy proxyval
 
+## Frissítés (új deploy) meglévő szerveren
+```bash
+cd /path/to/app
+./scripts/update-app.sh
+```
+
+Mit csinál:
+- `git fetch` + `git pull --ff-only` az adott branch-ről
+- `npm ci --omit=dev`
+- `pm2 restart ishido-camp` + `pm2 save`
+
+Fontos:
+- a script nem törli és nem módosítja közvetlenül a DB fájlokat
+- ha van lokális tracked módosítás a repóban, leáll hibával (védelem)
+
+## DB backup sync (rsync + cron)
+Külső szerverre másoláshoz:
+```bash
+cd /path/to/app
+./scripts/sync-db-backups.sh --target backupuser@backup-host:/srv/ishido/backups
+```
+
+Példa cron (óránként, 15. percben):
+```cron
+15 * * * * /bin/bash -lc 'cd /path/to/app && ./scripts/sync-db-backups.sh --target backupuser@backup-host:/srv/ishido/backups >> /var/log/ishido-backup-sync.log 2>&1'
+```
+
+SSH kulcs/egyedi port esetén:
+```bash
+./scripts/sync-db-backups.sh \
+  --target backupuser@backup-host:/srv/ishido/backups \
+  --ssh-port 2222 \
+  --ssh-key /home/app/.ssh/backup_key
+```
+
+Megjegyzés:
+- a script csak `camp-backup-*.db` fájlokat másol
+- nem nyúl `data/camp.db`, `data/camp.db-wal`, `data/camp.db-shm` fájlokhoz
+
+## DB visszaállítás menete
+1. Állítsd le az alkalmazást:
+```bash
+pm2 stop ishido-camp
+```
+2. Készíts mentést a jelenlegi DB-ről:
+```bash
+cp data/camp.db "data/camp.db.pre-restore.$(date +%Y%m%d-%H%M%S)"
+```
+3. Másold vissza a kiválasztott backup fájlt aktív DB-ként:
+```bash
+cp data/backups/camp-backup-YYYYMMDD-HHMMSS.db data/camp.db
+```
+4. Töröld a WAL/SHM mellékfájlokat (ha léteznek):
+```bash
+rm -f data/camp.db-wal data/camp.db-shm
+```
+5. (Opcionális) integritás ellenőrzés:
+```bash
+sqlite3 data/camp.db "PRAGMA integrity_check;"
+```
+6. Indítsd vissza az alkalmazást:
+```bash
+pm2 restart ishido-camp
+```
+
 Lokális fejlesztéshez javasolt:
 ```bash
 NODE_ENV=development
