@@ -3496,6 +3496,8 @@ function getSecurityHeadersForRequest(pathname) {
 
   if (
     pathname === '/admin' ||
+    pathname === '/js/admin.js' ||
+    pathname === '/js/admin-login.js' ||
     pathname.startsWith('/api/admin') ||
     pathname.startsWith('/api/stats') ||
     pathname.startsWith('/api/registrations')
