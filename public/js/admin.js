@@ -2,6 +2,7 @@
   const statsEl = document.getElementById('stats');
   const rowsEl = document.getElementById('rows');
   const logoutBtn = document.getElementById('logout-btn');
+  const refreshDataBtn = document.getElementById('refresh-data-btn');
   const exportCsvBtn = document.getElementById('export-csv-btn');
   const createBackupBtn = document.getElementById('create-backup-btn');
   const backupMessageEl = document.getElementById('backup-message');
@@ -809,6 +810,22 @@
     }
   }
 
+  async function refreshAdminData() {
+    if (!refreshDataBtn) {
+      await loadData();
+      return;
+    }
+
+    refreshDataBtn.disabled = true;
+    refreshDataBtn.textContent = 'Refreshing...';
+    try {
+      await loadData();
+    } finally {
+      refreshDataBtn.disabled = false;
+      refreshDataBtn.textContent = 'Refresh list';
+    }
+  }
+
   async function sendRetryPaymentEmail(registrationId) {
     const response = await fetch('/api/admin/registrations/send-retry-payment-email', {
       method: 'POST',
@@ -996,6 +1013,10 @@
 
   if (logoutBtn) {
     logoutBtn.addEventListener('click', logout);
+  }
+
+  if (refreshDataBtn) {
+    refreshDataBtn.addEventListener('click', refreshAdminData);
   }
 
   if (exportCsvBtn) {
