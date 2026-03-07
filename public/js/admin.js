@@ -106,6 +106,21 @@
       .replace(/'/g, '&#39;');
   }
 
+  async function readJsonResponseOrThrow(response) {
+    const raw = await response.text();
+    if (!raw) return {};
+
+    try {
+      return JSON.parse(raw);
+    } catch {
+      const snippet = raw.slice(0, 180).replace(/\s+/g, ' ').trim();
+      const hint = snippet.startsWith('<!DOCTYPE') || snippet.startsWith('<html')
+        ? 'The server returned an HTML page instead of JSON (session timeout or reverse proxy error page).'
+        : 'The server returned an invalid JSON response.';
+      throw new Error(`${hint} HTTP ${response.status}.`);
+    }
+  }
+
   function formatDateTime(value) {
     if (!value) return '-';
     const date = new Date(value);
@@ -944,12 +959,13 @@
           body
         })
       });
-      const result = await response.json();
 
       if (response.status === 401) {
         window.location.href = '/admin';
         return;
       }
+
+      const result = await readJsonResponseOrThrow(response);
 
       if (!response.ok) {
         throw new Error(result.error || 'Email sending failed.');
