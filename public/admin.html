@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Admin | Ishido Sensei - Summer Seminar 2026</title>
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="icon" href="/assets/favicon.ico" sizes="any" />
   </head>
   <body>
     <div class="site-wrap">
@@ -34,40 +35,47 @@
           <details class="card faq-item admin-accordion-item">
             <summary>Pricing settings</summary>
             <div class="accordion-content">
-              <p class="subtitle">Update package prices (EUR only).</p>
+              <p class="subtitle">Update Early Bird and Regular package prices (EUR). Early Bird applies until 2026-04-10, Regular from 2026-04-11.</p>
               <form id="pricing-form" novalidate>
                 <div class="table-wrap">
                   <table>
                     <thead>
                       <tr>
                         <th>Option</th>
-                        <th>EUR</th>
+                        <th>Early Bird EUR</th>
+                        <th>Regular EUR</th>
                       </tr>
                     </thead>
                     <tbody>
                       <tr>
                         <td>Full seminar</td>
-                        <td><input data-price-group="campType" data-price-code="full_seminar" inputmode="decimal" /></td>
+                        <td><input data-price-group="campType" data-price-code="full_seminar" data-price-tier="earlyBird" inputmode="decimal" /></td>
+                        <td><input data-price-group="campType" data-price-code="full_seminar" data-price-tier="regular" inputmode="decimal" /></td>
                       </tr>
                       <tr>
                         <td>Jodo part only</td>
-                        <td><input data-price-group="campType" data-price-code="jodo_part_only" inputmode="decimal" /></td>
+                        <td><input data-price-group="campType" data-price-code="jodo_part_only" data-price-tier="earlyBird" inputmode="decimal" /></td>
+                        <td><input data-price-group="campType" data-price-code="jodo_part_only" data-price-tier="regular" inputmode="decimal" /></td>
                       </tr>
                       <tr>
                         <td>Iaido part only</td>
-                        <td><input data-price-group="campType" data-price-code="iaido_part_only" inputmode="decimal" /></td>
+                        <td><input data-price-group="campType" data-price-code="iaido_part_only" data-price-tier="earlyBird" inputmode="decimal" /></td>
+                        <td><input data-price-group="campType" data-price-code="iaido_part_only" data-price-tier="regular" inputmode="decimal" /></td>
                       </tr>
                       <tr>
                         <td>One and a half days</td>
-                        <td><input data-price-group="campType" data-price-code="one_and_half_days" inputmode="decimal" /></td>
+                        <td><input data-price-group="campType" data-price-code="one_and_half_days" data-price-tier="earlyBird" inputmode="decimal" /></td>
+                        <td><input data-price-group="campType" data-price-code="one_and_half_days" data-price-tier="regular" inputmode="decimal" /></td>
                       </tr>
                       <tr>
                         <td>One day</td>
-                        <td><input data-price-group="campType" data-price-code="one_day" inputmode="decimal" /></td>
+                        <td><input data-price-group="campType" data-price-code="one_day" data-price-tier="earlyBird" inputmode="decimal" /></td>
+                        <td><input data-price-group="campType" data-price-code="one_day" data-price-tier="regular" inputmode="decimal" /></td>
                       </tr>
                       <tr>
                         <td>Half day</td>
-                        <td><input data-price-group="campType" data-price-code="half_day" inputmode="decimal" /></td>
+                        <td><input data-price-group="campType" data-price-code="half_day" data-price-tier="earlyBird" inputmode="decimal" /></td>
+                        <td><input data-price-group="campType" data-price-code="half_day" data-price-tier="regular" inputmode="decimal" /></td>
                       </tr>
                     </tbody>
                   </table>

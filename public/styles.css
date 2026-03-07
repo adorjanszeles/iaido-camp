@@ -185,7 +185,7 @@ a {
   border: 1px solid #c4d7eb;
   border-radius: 14px;
   background: linear-gradient(180deg, rgba(240, 247, 255, 0.95) 0%, rgba(232, 241, 251, 0.92) 100%);
-  text-align: left;
+  text-align: center;
 }
 
 .welcome-overview h3 {
@@ -213,7 +213,7 @@ a {
 .welcome-overview-names {
   margin: 0.2rem 0 0.6rem;
   color: #274868;
-  font-weight: 700;
+  font-weight: 400;
   line-height: 1.42;
 }
 
@@ -414,12 +414,32 @@ h1 {
   margin-bottom: 0;
 }
 
+.info-notice {
+  margin-top: 0.9rem;
+}
+
+.info-notice p {
+  margin: 0.45rem 0;
+  color: var(--muted);
+}
+
+.info-coming-soon-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 1rem 0 0;
+}
+
 .venue-photo {
   width: 100%;
   height: auto;
   border-radius: 16px;
   border: 1px solid var(--line);
   background: #fff;
+}
+
+.venue-photos {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .venue-photos figure {
@@ -753,6 +773,8 @@ footer {
   .grid-2,
   .form-grid,
   .home-cards,
+  .info-coming-soon-grid,
+  .venue-photos,
   .registration-details-grid {
     grid-template-columns: 1fr;
   }

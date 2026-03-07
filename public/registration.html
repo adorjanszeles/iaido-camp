@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Registration | Ishido Sensei - Summer Seminar 2026</title>
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="icon" href="/assets/favicon.ico" sizes="any" />
   </head>
   <body>
     <div class="site-wrap">
@@ -22,8 +23,26 @@
       <main class="container form-wrap">
         <section class="card">
           <h1>Seminar Registration</h1>
-          <p class="subtitle">
-            Your registration details are stored securely. After submission, you will continue to Stripe Checkout to complete payment.
+          <h2 class="section-title">Registration, Payment and Participation</h2>
+          <p class="muted">
+            Your registration details are stored securely. After submitting the form, you will be redirected to Stripe
+            Checkout to complete the payment.
+          </p>
+          <p class="muted">
+            Please note that registration becomes final only after successful payment. If the payment is not completed,
+            the registration will not be considered valid.
+          </p>
+          <p class="muted">
+            Participation is limited by the capacity of the venue, therefore registrations will be accepted on a
+            first-come, first-served basis.
+          </p>
+          <p class="muted">
+            The Early Bird registration period is available until 10 April 2026. After this date, the regular
+            registration fee will apply.
+          </p>
+          <p class="muted">
+            Participants who complete the seminar registration will receive further information about additional options
+            (such as Sayonara Party, dormitory accommodation, and lunch registration) when these become available.
           </p>
         </section>
 
@@ -192,6 +211,7 @@
 
           <section class="price-summary" aria-live="polite">
             <h3>Amount due</h3>
+            <p id="pricing-tier-note" class="helper"></p>
             <ul id="price-lines" class="price-lines"></ul>
             <p class="price-total">Total: <strong id="price-total">€0.00</strong></p>
             <p class="helper">The final amount is always calculated on the server in EUR and will be passed to Stripe Checkout.</p>

@@ -17,10 +17,13 @@
   const halfDayFixedNoticeEl = document.getElementById('halfDayFixedNotice');
   const priceLinesEl = document.getElementById('price-lines');
   const priceTotalEl = document.getElementById('price-total');
+  const pricingTierNoteEl = document.getElementById('pricing-tier-note');
   const messageEl = document.getElementById('form-message');
   const submitBtn = document.getElementById('submit-btn');
   const campTypesRequiringAttendanceDay = new Set(['one_day', 'one_and_half_days']);
   const halfDayFixedAttendanceDay = '2026-08-01';
+  const earlyBirdLastDayDefault = '2026-04-10';
+  const pricingTimeZoneDefault = 'Europe/Budapest';
   const gradeOrder = [
     'Mukyu',
     '2. kyu',
@@ -36,18 +39,66 @@
   ];
   const allowedExamTargets = new Set(['2. kyu', '1. kyu', '1. dan', '2. dan', '3. dan', '4. dan', '5. dan']);
 
-  const fallbackPricing = {
+  const fallbackPriceCatalog = {
     campType: {
-      full_seminar: { label: 'Full seminar', amount: 249 },
-      jodo_part_only: { label: 'Jodo part only', amount: 149 },
-      iaido_part_only: { label: 'Iaido part only', amount: 149 },
-      one_and_half_days: { label: 'One and a half days', amount: 189 },
-      one_day: { label: 'One day', amount: 129 },
-      half_day: { label: 'Half day', amount: 79 }
+      full_seminar: { label: 'Full seminar', earlyBirdAmount: 200, regularAmount: 220 },
+      jodo_part_only: { label: 'Jodo part only', earlyBirdAmount: 120, regularAmount: 130 },
+      iaido_part_only: { label: 'Iaido part only', earlyBirdAmount: 120, regularAmount: 130 },
+      one_and_half_days: { label: 'One and a half days', earlyBirdAmount: 80, regularAmount: 90 },
+      one_day: { label: 'One day', earlyBirdAmount: 50, regularAmount: 55 },
+      half_day: { label: 'Half day', earlyBirdAmount: 30, regularAmount: 35 }
     }
   };
 
-  let pricingConfig = fallbackPricing;
+  function getDateStringInTimeZone(date = new Date(), timeZone = pricingTimeZoneDefault) {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    const parts = formatter.formatToParts(date);
+    const year = parts.find((part) => part.type === 'year')?.value || '0000';
+    const month = parts.find((part) => part.type === 'month')?.value || '01';
+    const day = parts.find((part) => part.type === 'day')?.value || '01';
+    return `${year}-${month}-${day}`;
+  }
+
+  function isEarlyBirdActive(earlyBirdLastDay, timeZone) {
+    const today = getDateStringInTimeZone(new Date(), timeZone || pricingTimeZoneDefault);
+    const cutoff = String(earlyBirdLastDay || earlyBirdLastDayDefault);
+    return /^\d{4}-\d{2}-\d{2}$/.test(cutoff) && today <= cutoff;
+  }
+
+  function buildFallbackPricingConfig() {
+    const activeEarlyBird = isEarlyBirdActive(earlyBirdLastDayDefault, pricingTimeZoneDefault);
+    const config = { campType: {} };
+    Object.entries(fallbackPriceCatalog.campType).forEach(([code, option]) => {
+      const regularAmount = Number(option.regularAmount || 0);
+      const earlyBirdAmount = Number(option.earlyBirdAmount ?? regularAmount);
+      config.campType[code] = {
+        label: option.label,
+        amount: activeEarlyBird ? earlyBirdAmount : regularAmount,
+        regularAmount,
+        earlyBirdAmount,
+        pricingTier: activeEarlyBird ? 'early_bird' : 'regular'
+      };
+    });
+    return config;
+  }
+
+  function buildFallbackPricingMeta() {
+    const activeEarlyBird = isEarlyBirdActive(earlyBirdLastDayDefault, pricingTimeZoneDefault);
+    return {
+      timeZone: pricingTimeZoneDefault,
+      earlyBirdLastDay: earlyBirdLastDayDefault,
+      pricingTier: activeEarlyBird ? 'early_bird' : 'regular',
+      earlyBirdActive: activeEarlyBird
+    };
+  }
+
+  let pricingConfig = buildFallbackPricingConfig();
+  let pricingMeta = buildFallbackPricingMeta();
 
   function formatCurrency(value, currency = 'EUR') {
     return new Intl.NumberFormat('en-IE', {
@@ -56,6 +107,24 @@
       minimumFractionDigits: 2,
       maximumFractionDigits: 2
     }).format(Number(value || 0));
+  }
+
+  function formatIsoDateForUi(value) {
+    const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return value || '-';
+    return `${match[3]}.${match[2]}.${match[1]}`;
+  }
+
+  function renderPricingTierNote() {
+    if (!pricingTierNoteEl) return;
+    const tier = String(pricingMeta?.pricingTier || 'regular').trim().toLowerCase();
+    const cutoff = formatIsoDateForUi(pricingMeta?.earlyBirdLastDay || earlyBirdLastDayDefault);
+    if (tier === 'early_bird') {
+      pricingTierNoteEl.textContent = `Early Bird pricing is active until ${cutoff}.`;
+      return;
+    }
+
+    pricingTierNoteEl.textContent = `Regular pricing is active (Early Bird ended on ${cutoff}).`;
   }
 
   function getNextGrade(currentGrade) {
@@ -175,12 +244,21 @@
     const group = pricingConfig[groupName] || {};
     const option = group[code] || group[fallbackCode] || null;
     if (!option) {
-      return { label: code || fallbackCode || '-', amount: 0 };
+      return {
+        label: code || fallbackCode || '-',
+        amount: 0,
+        regularAmount: 0,
+        earlyBirdAmount: 0,
+        pricingTier: String(pricingMeta?.pricingTier || 'regular')
+      };
     }
 
     return {
       label: option.label || code || fallbackCode || '-',
-      amount: Number(option.amount || 0)
+      amount: Number(option.amount || 0),
+      regularAmount: Number(option.regularAmount ?? option.amount ?? 0),
+      earlyBirdAmount: Number(option.earlyBirdAmount ?? option.amount ?? 0),
+      pricingTier: String(option.pricingTier || pricingMeta?.pricingTier || 'regular')
     };
   }
 
@@ -199,12 +277,15 @@
 
   function renderPriceSummary() {
     const pricing = getPricingSelection();
+    const tier = String(pricingMeta?.pricingTier || 'regular').trim().toLowerCase();
+    const tierLabel = tier === 'early_bird' ? 'Early Bird' : 'Regular';
 
     priceLinesEl.innerHTML = pricing.lineItems
-      .map((item) => `<li><span>${item.label}</span><strong>${formatCurrency(item.amount, 'EUR')}</strong></li>`)
+      .map((item) => `<li><span>${item.label} (${tierLabel})</span><strong>${formatCurrency(item.amount, 'EUR')}</strong></li>`)
       .join('');
 
     priceTotalEl.textContent = formatCurrency(pricing.totalAmount, 'EUR');
+    renderPricingTierNote();
   }
 
   function formDataToPayload() {
@@ -280,8 +361,12 @@
       if (result && result.pricing) {
         pricingConfig = result.pricing;
       }
+      if (result && result.pricingMeta && typeof result.pricingMeta === 'object') {
+        pricingMeta = result.pricingMeta;
+      }
     } catch {
-      pricingConfig = fallbackPricing;
+      pricingConfig = buildFallbackPricingConfig();
+      pricingMeta = buildFallbackPricingMeta();
     } finally {
       renderPriceSummary();
     }

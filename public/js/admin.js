@@ -539,7 +539,10 @@
     inputs.forEach((input) => {
       const group = input.getAttribute('data-price-group');
       const code = input.getAttribute('data-price-code');
-      const amount = settings?.prices?.[group]?.[code];
+      const tier = String(input.getAttribute('data-price-tier') || 'regular').trim();
+      const amount = tier === 'earlyBird'
+        ? settings?.earlyBirdPrices?.[group]?.[code]
+        : settings?.prices?.[group]?.[code];
       input.value = Number.isFinite(Number(amount)) ? String(amount) : '';
     });
 
@@ -551,25 +554,29 @@
       throw new Error('Pricing form is not available.');
     }
 
-    const prices = {
-      campType: {}
-    };
+    const prices = { campType: {} };
+    const earlyBirdPrices = { campType: {} };
 
     const inputs = pricingFormEl.querySelectorAll('[data-price-group][data-price-code]');
     inputs.forEach((input) => {
       const group = input.getAttribute('data-price-group');
       const code = input.getAttribute('data-price-code');
+      const tier = String(input.getAttribute('data-price-tier') || 'regular').trim();
       const raw = String(input.value || '').trim();
       const numeric = Number(raw);
 
       if (!Number.isFinite(numeric) || numeric < 0) {
-        throw new Error(`Invalid price at ${group}/${code}.`);
+        throw new Error(`Invalid price at ${group}/${code}/${tier}.`);
       }
 
-      prices[group][code] = Math.round(numeric * 100) / 100;
+      if (tier === 'earlyBird') {
+        earlyBirdPrices[group][code] = Math.round(numeric * 100) / 100;
+      } else {
+        prices[group][code] = Math.round(numeric * 100) / 100;
+      }
     });
 
-    return { prices };
+    return { prices, earlyBirdPrices };
   }
 
   async function savePricingSettings(event) {

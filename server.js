@@ -174,14 +174,24 @@ const SZAMLAZZ_SEND_EMAIL = String(process.env.SZAMLAZZ_SEND_EMAIL || 'true').tr
 const SZAMLAZZ_SET_PAID = String(process.env.SZAMLAZZ_SET_PAID || 'true').trim().toLowerCase() !== 'false';
 const SZAMLAZZ_COMMENT = String(process.env.SZAMLAZZ_COMMENT || 'Ishido Sensei - Summer Seminar 2026').trim();
 const SZAMLAZZ_EXTERNAL_ID_PREFIX = String(process.env.SZAMLAZZ_EXTERNAL_ID_PREFIX || 'camp-').trim();
+const EARLY_BIRD_LAST_DAY = '2026-04-10';
+const EARLY_BIRD_TIMEZONE = 'Europe/Budapest';
+const LEGACY_CAMP_TYPE_DEFAULT_PRICES = {
+  full_seminar: 249,
+  jodo_part_only: 149,
+  iaido_part_only: 149,
+  one_and_half_days: 189,
+  one_day: 129,
+  half_day: 79
+};
 const PRICE_CATALOG = {
   campType: {
-    full_seminar: { label: 'Full seminar', defaultAmount: 249 },
-    jodo_part_only: { label: 'Jodo part only', defaultAmount: 149 },
-    iaido_part_only: { label: 'Iaido part only', defaultAmount: 149 },
-    one_and_half_days: { label: 'One and a half days', defaultAmount: 189 },
-    one_day: { label: 'One day', defaultAmount: 129 },
-    half_day: { label: 'Half day', defaultAmount: 79 }
+    full_seminar: { label: 'Full seminar', defaultAmount: 220 },
+    jodo_part_only: { label: 'Jodo part only', defaultAmount: 130 },
+    iaido_part_only: { label: 'Iaido part only', defaultAmount: 130 },
+    one_and_half_days: { label: 'One and a half days', defaultAmount: 90 },
+    one_day: { label: 'One day', defaultAmount: 55 },
+    half_day: { label: 'Half day', defaultAmount: 35 }
   },
   mealPlan: {
     none: { label: 'No meal', defaultAmount: 0 },
@@ -229,6 +239,17 @@ function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function buildDefaultEarlyBirdCampTypePrices() {
+  return {
+    full_seminar: 200,
+    jodo_part_only: 120,
+    iaido_part_only: 120,
+    one_and_half_days: 80,
+    one_day: 50,
+    half_day: 30
+  };
+}
+
 function buildDefaultPricingSettings() {
   const prices = {};
   for (const [groupName, options] of Object.entries(PRICE_CATALOG)) {
@@ -239,7 +260,11 @@ function buildDefaultPricingSettings() {
   }
 
   return {
-    prices
+    prices,
+    earlyBirdPrices: {
+      campType: buildDefaultEarlyBirdCampTypePrices()
+    },
+    earlyBirdLastDay: EARLY_BIRD_LAST_DAY
   };
 }
 
@@ -253,12 +278,43 @@ function normalizeMoneyAmount(value) {
   return Math.round(num * 100) / 100;
 }
 
+function normalizeIsoDate(value, fallback) {
+  const raw = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return raw;
+  }
+  return String(fallback || EARLY_BIRD_LAST_DAY);
+}
+
+function hasEarlyBirdCampTypeSettings(value) {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    value.earlyBirdPrices &&
+    typeof value.earlyBirdPrices === 'object' &&
+    value.earlyBirdPrices.campType &&
+    typeof value.earlyBirdPrices.campType === 'object'
+  );
+}
+
+function matchesLegacyCampTypeDefaults(campTypePrices) {
+  const current = campTypePrices && typeof campTypePrices === 'object' ? campTypePrices : {};
+  return Object.entries(LEGACY_CAMP_TYPE_DEFAULT_PRICES).every(([code, expected]) => {
+    const actual = Number(current[code]);
+    return Number.isFinite(actual) && Math.abs(actual - expected) < 0.000001;
+  });
+}
+
 function normalizePricingSettings(rawSettings, fallbackSettings = DEFAULT_PRICING_SETTINGS) {
   const fallback = deepClone(fallbackSettings);
   const raw = rawSettings && typeof rawSettings === 'object' ? rawSettings : {};
 
   const normalized = {
-    prices: {}
+    prices: {},
+    earlyBirdPrices: {
+      campType: {}
+    },
+    earlyBirdLastDay: normalizeIsoDate(raw.earlyBirdLastDay, fallback.earlyBirdLastDay)
   };
 
   for (const [groupName, options] of Object.entries(PRICE_CATALOG)) {
@@ -266,24 +322,101 @@ function normalizePricingSettings(rawSettings, fallbackSettings = DEFAULT_PRICIN
     const rawGroup = raw.prices && typeof raw.prices[groupName] === 'object' ? raw.prices[groupName] : {};
     for (const optionCode of Object.keys(options)) {
       const rawOption = rawGroup[optionCode];
+      const rawPrimitive = (typeof rawOption === 'number' || typeof rawOption === 'string') ? rawOption : undefined;
       const fallbackOption = fallback.prices[groupName][optionCode];
       const fromLegacyObject = rawOption && typeof rawOption === 'object' ? rawOption.EUR : undefined;
-      normalized.prices[groupName][optionCode] = normalizeMoneyAmount(rawOption ?? fromLegacyObject ?? fallbackOption);
+      normalized.prices[groupName][optionCode] = normalizeMoneyAmount(rawPrimitive ?? fromLegacyObject ?? fallbackOption);
     }
+  }
+
+  const rawEarlyBirdCampType = (
+    raw.earlyBirdPrices &&
+    typeof raw.earlyBirdPrices === 'object' &&
+    raw.earlyBirdPrices.campType &&
+    typeof raw.earlyBirdPrices.campType === 'object'
+  ) ? raw.earlyBirdPrices.campType : {};
+
+  for (const optionCode of Object.keys(PRICE_CATALOG.campType)) {
+    const fallbackOption = fallback.earlyBirdPrices.campType[optionCode];
+    const rawOption = rawEarlyBirdCampType[optionCode];
+    const rawPrimitive = (typeof rawOption === 'number' || typeof rawOption === 'string') ? rawOption : undefined;
+    const fromLegacyObject = rawOption && typeof rawOption === 'object'
+      ? (rawOption.EUR ?? rawOption.earlyBird ?? rawOption.early_bird)
+      : undefined;
+    normalized.earlyBirdPrices.campType[optionCode] = normalizeMoneyAmount(rawPrimitive ?? fromLegacyObject ?? fallbackOption);
   }
 
   return normalized;
 }
 
-function buildPublicPricingConfig(pricingSettings) {
+function getDateStringInTimeZone(date = new Date(), timeZone = EARLY_BIRD_TIMEZONE) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  const parts = formatter.formatToParts(date);
+  const year = parts.find((part) => part.type === 'year')?.value || '0000';
+  const month = parts.find((part) => part.type === 'month')?.value || '01';
+  const day = parts.find((part) => part.type === 'day')?.value || '01';
+  return `${year}-${month}-${day}`;
+}
+
+function isEarlyBirdActive(pricingSettings, date = new Date()) {
+  const cutoff = normalizeIsoDate(pricingSettings?.earlyBirdLastDay, EARLY_BIRD_LAST_DAY);
+  const todayInBudapest = getDateStringInTimeZone(date, EARLY_BIRD_TIMEZONE);
+  return todayInBudapest <= cutoff;
+}
+
+function buildPricingMeta(pricingSettings, date = new Date()) {
+  const cutoff = normalizeIsoDate(pricingSettings?.earlyBirdLastDay, EARLY_BIRD_LAST_DAY);
+  const todayInBudapest = getDateStringInTimeZone(date, EARLY_BIRD_TIMEZONE);
+  const earlyBirdActive = todayInBudapest <= cutoff;
+  return {
+    timeZone: EARLY_BIRD_TIMEZONE,
+    todayInTimeZone: todayInBudapest,
+    earlyBirdLastDay: cutoff,
+    pricingTier: earlyBirdActive ? 'early_bird' : 'regular',
+    earlyBirdActive
+  };
+}
+
+function getCampTypeEffectiveAmount(optionCode, pricingSettings, date = new Date()) {
+  const regularAmount = Number(pricingSettings.prices.campType[optionCode]);
+  const earlyBirdAmount = Number(pricingSettings.earlyBirdPrices?.campType?.[optionCode] ?? regularAmount);
+  const earlyBirdActive = isEarlyBirdActive(pricingSettings, date);
+  return {
+    amount: earlyBirdActive ? earlyBirdAmount : regularAmount,
+    regularAmount,
+    earlyBirdAmount,
+    pricingTier: earlyBirdActive ? 'early_bird' : 'regular'
+  };
+}
+
+function buildPublicPricingConfig(pricingSettings, date = new Date()) {
   const config = {};
   for (const [groupName, options] of Object.entries(PRICE_CATALOG)) {
     config[groupName] = {};
     for (const [optionCode, option] of Object.entries(options)) {
-      const amounts = pricingSettings.prices[groupName][optionCode];
+      const amounts = Number(pricingSettings.prices[groupName][optionCode]);
+      if (groupName === 'campType') {
+        const effective = getCampTypeEffectiveAmount(optionCode, pricingSettings, date);
+        config[groupName][optionCode] = {
+          label: option.label,
+          amount: Number(effective.amount),
+          regularAmount: Number(effective.regularAmount),
+          earlyBirdAmount: Number(effective.earlyBirdAmount),
+          pricingTier: effective.pricingTier
+        };
+        continue;
+      }
       config[groupName][optionCode] = {
         label: option.label,
-        amount: Number(amounts)
+        amount: Number(amounts),
+        regularAmount: Number(amounts),
+        earlyBirdAmount: Number(amounts),
+        pricingTier: 'regular'
       };
     }
   }
@@ -311,7 +444,17 @@ function loadPricingSettings(db) {
 
   try {
     const parsed = JSON.parse(String(row.value));
-    return normalizePricingSettings(parsed, DEFAULT_PRICING_SETTINGS);
+    const normalized = normalizePricingSettings(parsed, DEFAULT_PRICING_SETTINGS);
+
+    if (!hasEarlyBirdCampTypeSettings(parsed)) {
+      // One-time migration from legacy single-price schema.
+      if (matchesLegacyCampTypeDefaults(normalized.prices?.campType)) {
+        normalized.prices.campType = deepClone(DEFAULT_PRICING_SETTINGS.prices.campType);
+      }
+      savePricingSettings(db, normalized);
+    }
+
+    return normalized;
   } catch {
     const defaults = deepClone(DEFAULT_PRICING_SETTINGS);
     savePricingSettings(db, defaults);
@@ -519,13 +662,19 @@ function calculatePricing(selection, pricingSettings = DEFAULT_PRICING_SETTINGS)
   const mealPlan = toEnumValue(selection.mealPlan, pricingSettings.prices.mealPlan, 'none');
   const accommodation = toEnumValue(selection.accommodation, pricingSettings.prices.accommodation, 'none');
   const currency = 'EUR';
+  const pricingNow = new Date();
+  const pricingMeta = buildPricingMeta(pricingSettings, pricingNow);
+  const campTypeAmount = getCampTypeEffectiveAmount(campType, pricingSettings, pricingNow);
 
   const lineItems = [
     {
       key: 'campType',
       code: campType,
       label: PRICE_CATALOG.campType[campType].label,
-      amount: pricingSettings.prices.campType[campType]
+      amount: campTypeAmount.amount,
+      regularAmount: campTypeAmount.regularAmount,
+      earlyBirdAmount: campTypeAmount.earlyBirdAmount,
+      pricingTier: campTypeAmount.pricingTier
     }
   ];
 
@@ -537,7 +686,11 @@ function calculatePricing(selection, pricingSettings = DEFAULT_PRICING_SETTINGS)
     total: totalAmount,
     totalAmount,
     totalHuf: totalAmount,
-    currency
+    currency,
+    pricingTier: pricingMeta.pricingTier,
+    earlyBirdActive: pricingMeta.earlyBirdActive,
+    earlyBirdLastDay: pricingMeta.earlyBirdLastDay,
+    pricingDateInTimeZone: pricingMeta.todayInTimeZone
   };
 }
 
@@ -3652,8 +3805,11 @@ function createServer(options = {}) {
     }
 
     if (req.method === 'GET' && pathname === '/api/pricing') {
+      const pricingNow = new Date();
+      const pricingMeta = buildPricingMeta(pricingSettings, pricingNow);
       sendJson(res, 200, {
-        pricing: buildPublicPricingConfig(pricingSettings),
+        pricing: buildPublicPricingConfig(pricingSettings, pricingNow),
+        pricingMeta,
         currency: 'EUR'
       });
       return;
@@ -3864,9 +4020,12 @@ function createServer(options = {}) {
         return;
       }
 
+      const pricingNow = new Date();
+      const pricingMeta = buildPricingMeta(pricingSettings, pricingNow);
       sendJson(res, 200, {
         settings: pricingSettings,
-        pricing: buildPublicPricingConfig(pricingSettings)
+        pricing: buildPublicPricingConfig(pricingSettings, pricingNow),
+        pricingMeta
       });
       return;
     }
@@ -3888,10 +4047,13 @@ function createServer(options = {}) {
         });
 
         pricingSettings = nextPricingSettings;
+        const pricingNow = new Date();
+        const pricingMeta = buildPricingMeta(pricingSettings, pricingNow);
         sendJson(res, 200, {
           message: 'Pricing settings saved.',
           settings: pricingSettings,
-          pricing: buildPublicPricingConfig(pricingSettings)
+          pricing: buildPublicPricingConfig(pricingSettings, pricingNow),
+          pricingMeta
         });
       } catch (error) {
         if (isSqliteBusyError(error)) {
