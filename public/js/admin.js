@@ -225,9 +225,10 @@
       .reverse()
       .map((item) => {
         const camp = formatOption('campType', item.campType);
-        const isDeleted = item.status === 'DELETED';
-        const isAnonymized = item.status === 'ANONYMIZED';
-        const isPaid = item.status === 'PAID';
+        const normalizedStatus = String(item.status || '').trim().toUpperCase();
+        const isDeleted = normalizedStatus === 'DELETED';
+        const isAnonymized = normalizedStatus === 'ANONYMIZED';
+        const isPaid = normalizedStatus === 'PAID';
         const canHardDelete = isDeleted || isAnonymized;
         const amount = Number(item.amount ?? item.amountHuf ?? 0);
         const deleteAction = isDeleted || isAnonymized
@@ -237,7 +238,7 @@
           ? '<span class="helper">Anonymized</span>'
           : `<button class="btn secondary btn-small js-anonymize" data-registration-id="${item.id}" type="button">GDPR anonymize</button>`;
         const hardDeleteAction = canHardDelete
-          ? `<button class="btn danger btn-small js-hard-delete" data-registration-id="${item.id}" type="button">Hard delete</button>`
+          ? `<button class="btn danger btn-small js-hard-delete" data-registration-id="${item.id}" type="button">Hard delete (permanent)</button>`
           : '<span class="helper">-</span>';
         const retryEmailAction = isDeleted || isAnonymized || isPaid
           ? '<span class="helper">-</span>'
