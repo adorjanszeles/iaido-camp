@@ -228,6 +228,7 @@
         const isDeleted = item.status === 'DELETED';
         const isAnonymized = item.status === 'ANONYMIZED';
         const isPaid = item.status === 'PAID';
+        const canHardDelete = isDeleted || isAnonymized;
         const amount = Number(item.amount ?? item.amountHuf ?? 0);
         const deleteAction = isDeleted || isAnonymized
           ? '<span class="helper">-</span>'
@@ -235,11 +236,14 @@
         const anonymizeAction = isAnonymized
           ? '<span class="helper">Anonymized</span>'
           : `<button class="btn secondary btn-small js-anonymize" data-registration-id="${item.id}" type="button">GDPR anonymize</button>`;
+        const hardDeleteAction = canHardDelete
+          ? `<button class="btn danger btn-small js-hard-delete" data-registration-id="${item.id}" type="button">Hard delete</button>`
+          : '<span class="helper">-</span>';
         const retryEmailAction = isDeleted || isAnonymized || isPaid
           ? '<span class="helper">-</span>'
           : `<button class="btn secondary btn-small js-send-retry-email" data-registration-id="${item.id}" type="button">Send payment link email</button>`;
         const detailsToggle = `<button class="btn secondary btn-small js-toggle-details" data-registration-id="${item.id}" aria-expanded="false" type="button">Show details</button>`;
-        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}`;
+        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}<div style="height:0.35rem"></div>${hardDeleteAction}`;
         const detailRow = `
           <tr class="registration-details-row" data-details-row="${item.id}" hidden>
             <td colspan="7">
@@ -686,7 +690,7 @@
         body: JSON.stringify({ registrationId })
       });
 
-      const result = await response.json();
+      const result = await readJsonResponseOrThrow(response);
       if (response.status === 401) {
         window.location.href = '/admin';
         return;
@@ -715,7 +719,7 @@
         body: JSON.stringify({ registrationId })
       });
 
-      const result = await response.json();
+      const result = await readJsonResponseOrThrow(response);
       if (response.status === 401) {
         window.location.href = '/admin';
         return;
@@ -723,6 +727,37 @@
 
       if (!response.ok) {
         throw new Error(result.error || 'Failed to anonymize registration.');
+      }
+
+      await loadData();
+    } catch (error) {
+      window.alert(error.message);
+    }
+  }
+
+  async function hardDelete(registrationId) {
+    const shouldProceed = window.confirm(
+      'Are you sure you want to permanently delete this registration? This cannot be undone.'
+    );
+    if (!shouldProceed) return;
+
+    try {
+      const response = await fetch('/api/admin/registrations/hard-delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ registrationId })
+      });
+
+      const result = await readJsonResponseOrThrow(response);
+      if (response.status === 401) {
+        window.location.href = '/admin';
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to permanently delete registration.');
       }
 
       await loadData();
@@ -1132,6 +1167,14 @@
       const registrationId = anonymizeButton.getAttribute('data-registration-id');
       if (!registrationId) return;
       anonymize(registrationId);
+      return;
+    }
+
+    const hardDeleteButton = event.target.closest('.js-hard-delete');
+    if (hardDeleteButton) {
+      const registrationId = hardDeleteButton.getAttribute('data-registration-id');
+      if (!registrationId) return;
+      hardDelete(registrationId);
     }
   });
 

@@ -2595,6 +2595,26 @@ function anonymizeRegistration(db, registrationId) {
   return Number(result.changes || 0);
 }
 
+function hardDeleteRegistration(db, registrationId) {
+  const safeRegistrationId = String(registrationId || '').trim();
+  if (!safeRegistrationId) return 0;
+
+  db.exec('BEGIN');
+  try {
+    const deleteInvoiceRecord = db.prepare('DELETE FROM invoice_records WHERE registration_id = ?');
+    deleteInvoiceRecord.run(safeRegistrationId);
+
+    const deleteRegistration = db.prepare('DELETE FROM registrations WHERE id = ?');
+    const result = deleteRegistration.run(safeRegistrationId);
+
+    db.exec('COMMIT');
+    return Number(result.changes || 0);
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -4195,6 +4215,49 @@ function createServer(options = {}) {
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/api/admin/registrations/hard-delete') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      try {
+        const body = await parseJsonBody(req);
+        const registrationId = String(body.registrationId || '').trim();
+
+        if (!registrationId) {
+          sendJson(res, 400, { error: 'registrationId is required.' });
+          return;
+        }
+
+        const registration = getRegistrationById(db, registrationId);
+        if (!registration) {
+          sendJson(res, 404, { error: 'Registration not found.' });
+          return;
+        }
+
+        if (registration.status !== 'DELETED' && registration.status !== 'ANONYMIZED') {
+          sendJson(res, 400, { error: 'Hard delete is only allowed for DELETED or ANONYMIZED registrations.' });
+          return;
+        }
+
+        const changedRows = await runWithSqliteRetry(() => hardDeleteRegistration(db, registrationId));
+        if (changedRows === 0) {
+          sendJson(res, 404, { error: 'Registration not found.' });
+          return;
+        }
+
+        sendJson(res, 200, { message: 'Registration was permanently deleted.' });
+      } catch (error) {
+        if (isSqliteBusyError(error)) {
+          sendJson(res, 503, { error: 'Database is currently busy. Please try again in a few seconds.' });
+          return;
+        }
+        sendJson(res, 400, { error: error.message || 'Invalid request' });
+      }
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/register') {
       const registerRateLimit = checkRateLimit({
         bucketName: 'registration_submit',
@@ -4535,6 +4598,7 @@ module.exports = {
   insertRegistration,
   updateRegistrationStatus,
   anonymizeRegistration,
+  hardDeleteRegistration,
   calculatePricing,
   PRICE_OPTIONS,
   PRIVACY_POLICY_VERSION,

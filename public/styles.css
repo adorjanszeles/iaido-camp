@@ -313,6 +313,16 @@ h1 {
   border: 1px solid var(--line);
 }
 
+.btn.danger {
+  background: #b4282f;
+  color: #fff;
+  border: 1px solid #9f1f26;
+}
+
+.btn.danger:hover {
+  background: #9f1f26;
+}
+
 .btn.small,
 .btn-small {
   padding: 0.35rem 0.6rem;
