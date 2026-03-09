@@ -240,11 +240,14 @@
         const hardDeleteAction = canHardDelete
           ? `<button class="btn danger btn-small js-hard-delete" data-registration-id="${item.id}" type="button">Hard delete (permanent)</button>`
           : '<span class="helper">-</span>';
+        const stripeCheckAction = isDeleted || isAnonymized
+          ? '<span class="helper">-</span>'
+          : `<button class="btn secondary btn-small js-check-stripe-payment" data-registration-id="${item.id}" type="button">Check Stripe payment</button>`;
         const retryEmailAction = isDeleted || isAnonymized || isPaid
           ? '<span class="helper">-</span>'
           : `<button class="btn secondary btn-small js-send-retry-email" data-registration-id="${item.id}" type="button">Send payment link email</button>`;
         const detailsToggle = `<button class="btn secondary btn-small js-toggle-details" data-registration-id="${item.id}" aria-expanded="false" type="button">Show details</button>`;
-        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}<div style="height:0.35rem"></div>${hardDeleteAction}`;
+        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}<div style="height:0.35rem"></div>${hardDeleteAction}`;
         const detailRow = `
           <tr class="registration-details-row" data-details-row="${item.id}" hidden>
             <td colspan="7">
@@ -898,6 +901,43 @@
     window.alert(message);
   }
 
+  async function checkStripePayment(registrationId) {
+    const response = await fetch('/api/admin/registrations/check-stripe-payment', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ registrationId })
+    });
+
+    const result = await readJsonResponseOrThrow(response);
+    if (response.status === 401) {
+      window.location.href = '/admin';
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(result.error || 'Stripe payment check failed.');
+    }
+
+    const lines = [
+      result.message || 'Stripe payment check completed.',
+      `Registration ID: ${result.registrationId || registrationId}`,
+      `Registration status: ${result.registrationStatus || '-'}`,
+      `Stripe payment status: ${result?.stripe?.paymentStatus || '-'}`,
+      `Stripe checkout status: ${result?.stripe?.checkoutStatus || '-'}`,
+      `Stripe session: ${result?.stripe?.sessionId || '-'}`
+    ];
+    if (result?.invoice?.id || result?.invoice?.invoiceNumber) {
+      lines.push(`Invoice: ${result.invoice.invoiceNumber || result.invoice.id} (${result.invoice.status || 'ok'})`);
+    }
+    if (result?.invoiceWarning) {
+      lines.push(`Invoice warning: ${result.invoiceWarning}`);
+    }
+
+    window.alert(lines.join('\n'));
+    await loadData();
+  }
+
   async function updateAdminPassword(event) {
     event.preventDefault();
     if (!passwordFormEl) return;
@@ -1165,6 +1205,16 @@
       const registrationId = retryEmailButton.getAttribute('data-registration-id');
       if (!registrationId) return;
       sendRetryPaymentEmail(registrationId).catch((error) => {
+        window.alert(error.message);
+      });
+      return;
+    }
+
+    const checkStripeButton = event.target.closest('.js-check-stripe-payment');
+    if (checkStripeButton) {
+      const registrationId = checkStripeButton.getAttribute('data-registration-id');
+      if (!registrationId) return;
+      checkStripePayment(registrationId).catch((error) => {
         window.alert(error.message);
       });
       return;

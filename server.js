@@ -4276,6 +4276,133 @@ function createServer(options = {}) {
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/api/admin/registrations/check-stripe-payment') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+      if (!isStripeEnabled()) {
+        sendJson(res, 503, { error: 'Stripe is not configured. Set STRIPE_SECRET_KEY first.' });
+        return;
+      }
+
+      try {
+        const body = await parseJsonBody(req);
+        const registrationId = String(body.registrationId || '').trim();
+        if (!registrationId) {
+          sendJson(res, 400, { error: 'registrationId is required.' });
+          return;
+        }
+
+        const registration = getRegistrationById(db, registrationId);
+        if (!registration) {
+          sendJson(res, 404, { error: 'Registration not found.' });
+          return;
+        }
+
+        if (registration.status === 'DELETED' || registration.status === 'ANONYMIZED') {
+          sendJson(res, 400, { error: `Cannot check Stripe payment for status: ${registration.status}.` });
+          return;
+        }
+
+        const checkoutSessionId = String(registration.stripeCheckoutSessionId || '').trim();
+        if (!checkoutSessionId) {
+          sendJson(res, 400, { error: 'No Stripe checkout session is stored for this registration yet.' });
+          return;
+        }
+
+        const session = await getStripeCheckoutSession(checkoutSessionId);
+        const stripeRegistrationId = extractRegistrationIdFromStripeSession(session);
+        if (stripeRegistrationId && stripeRegistrationId !== registration.id) {
+          sendJson(res, 409, {
+            error: `Stripe session registration mismatch. Stripe points to ${stripeRegistrationId}, expected ${registration.id}.`
+          });
+          return;
+        }
+
+        const expectedMinor = toStripeMinorUnits(registration.amount ?? registration.amountHuf ?? 0, registration.currency || 'EUR');
+        const stripeCurrency = String(session?.currency || '').trim().toUpperCase();
+        const stripeAmountMinor = Number(session?.amount_total ?? NaN);
+        const registrationCurrency = String(registration.currency || 'EUR').trim().toUpperCase();
+        if (stripeCurrency && stripeCurrency !== registrationCurrency) {
+          sendJson(res, 409, {
+            error: `Stripe currency mismatch. Stripe: ${stripeCurrency}, registration: ${registrationCurrency}.`
+          });
+          return;
+        }
+        if (Number.isFinite(stripeAmountMinor) && stripeAmountMinor !== expectedMinor) {
+          sendJson(res, 409, {
+            error: `Stripe amount mismatch. Stripe: ${stripeAmountMinor}, registration: ${expectedMinor} (minor units).`
+          });
+          return;
+        }
+
+        const eventCreatedAt = stripeUnixToIso(session?.created) || new Date().toISOString();
+        const syncResult = await runWithSqliteRetry(() => syncRegistrationFromStripeSession(db, session, {
+          eventType: 'checkout.session.admin_manual_check',
+          eventCreatedAt
+        }));
+
+        if (!syncResult.registrationId) {
+          sendJson(res, 404, { error: 'Could not match this Stripe session to any registration.' });
+          return;
+        }
+        if (syncResult.registrationId !== registration.id) {
+          sendJson(res, 409, {
+            error: `Stripe sync resolved another registration (${syncResult.registrationId}). Aborted.`
+          });
+          return;
+        }
+
+        let invoice = null;
+        let invoiceWarning = '';
+        if (syncResult.paid && isSzamlazzEnabled()) {
+          try {
+            const invoiceResult = await createInvoiceForRegistration(db, syncResult.registrationId, {
+              triggerSource: 'stripe_admin_check'
+            });
+            invoice = {
+              created: Boolean(invoiceResult?.created),
+              reused: Boolean(invoiceResult?.reused),
+              id: String(invoiceResult?.invoice?.id || ''),
+              invoiceNumber: String(invoiceResult?.invoice?.invoiceNumber || ''),
+              status: String(invoiceResult?.invoice?.status || '')
+            };
+          } catch (invoiceError) {
+            invoiceWarning = invoiceError.message || 'Invoice creation failed.';
+            console.error(`Invoice creation failed for ${syncResult.registrationId}: ${invoiceWarning}`);
+          }
+        }
+
+        const updatedRegistration = getRegistrationById(db, syncResult.registrationId);
+        sendJson(res, 200, {
+          message: syncResult.paid
+            ? 'Stripe check completed. Payment is marked as paid.'
+            : 'Stripe check completed. Payment is not marked as paid on Stripe.',
+          registrationId: syncResult.registrationId,
+          registrationStatus: updatedRegistration?.status || 'UNKNOWN',
+          paid: Boolean(syncResult.paid),
+          stripe: {
+            sessionId: getStripeStringId(session?.id),
+            paymentStatus: String(session?.payment_status || '').trim().toLowerCase(),
+            checkoutStatus: String(session?.status || '').trim().toLowerCase(),
+            paymentIntentId: getStripeStringId(session?.payment_intent),
+            customerId: getStripeStringId(session?.customer)
+          },
+          invoice,
+          invoiceWarning
+        });
+      } catch (error) {
+        if (isSqliteBusyError(error)) {
+          sendJson(res, 503, { error: 'Database is currently busy. Please try again in a few seconds.' });
+          return;
+        }
+        const statusCode = Number(error.statusCode) || 400;
+        sendJson(res, statusCode, { error: error.message || 'Could not check Stripe payment.' });
+      }
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/admin/registrations/send-retry-payment-email') {
       if (!isAdminAuthenticated(req, db)) {
         sendJson(res, 401, { error: 'Admin login required.' });
