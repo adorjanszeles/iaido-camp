@@ -229,6 +229,7 @@
         const isDeleted = normalizedStatus === 'DELETED';
         const isAnonymized = normalizedStatus === 'ANONYMIZED';
         const isPaid = normalizedStatus === 'PAID';
+        const isPendingPayment = normalizedStatus === 'PENDING_PAYMENT';
         const canHardDelete = isDeleted || isAnonymized;
         const amount = Number(item.amount ?? item.amountHuf ?? 0);
         const deleteAction = isDeleted || isAnonymized
@@ -240,9 +241,9 @@
         const hardDeleteAction = canHardDelete
           ? `<button class="btn danger btn-small js-hard-delete" data-registration-id="${item.id}" type="button">Hard delete (permanent)</button>`
           : '<span class="helper">-</span>';
-        const stripeCheckAction = isDeleted || isAnonymized
-          ? '<span class="helper">-</span>'
-          : `<button class="btn secondary btn-small js-check-stripe-payment" data-registration-id="${item.id}" type="button">Check Stripe payment</button>`;
+        const stripeCheckAction = isPendingPayment
+          ? `<button class="btn secondary btn-small js-check-stripe-payment" data-registration-id="${item.id}" type="button">Check Stripe payment</button>`
+          : '<span class="helper">-</span>';
         const retryEmailAction = isDeleted || isAnonymized || isPaid
           ? '<span class="helper">-</span>'
           : `<button class="btn secondary btn-small js-send-retry-email" data-registration-id="${item.id}" type="button">Send payment link email</button>`;
