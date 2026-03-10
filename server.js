@@ -3322,35 +3322,45 @@ function buildRetryPaymentEmailMessage(registration, retryUrl, expiresAtIso) {
 
   const subject = `Payment link - ${registrationId}`;
   const textLines = [
-    `Hello ${fullName},`,
+    `Dear ${fullName},`,
     '',
-    'Your previous payment was not completed.',
-    'Please use the link below to complete your payment:',
-    retryUrl,
+    'We noticed that your recent payment attempt for the Summer Seminar 2026 was not completed.',
+    'Please note that your registration has been placed on our waiting list until the payment is successfully processed.',
+    'To secure your spot, please use the secure payment link below to complete your transaction:',
+    `👉 ${retryUrl}`,
     '',
-    `Registration ID: ${registrationId}`,
-    `Package: ${packageLabel}`,
-    `Amount: ${amount}`
+    'Your Registration Details:',
+    `• Registration ID: ${registrationId}`,
+    `• Package: ${packageLabel}`,
+    `• Amount Due: ${amount}`
   ];
 
   if (expiresAtText) {
-    textLines.push(`Link expires at: ${expiresAtText}`);
+    textLines.push(`• Link Expires At: ${expiresAtText}`);
   }
 
-  textLines.push('', 'If you have any issue, please contact the Organizing Team at info@summerseminar2026.hu.', '', 'Best regards,', 'Organizing Team');
+  textLines.push(
+    '',
+    "If you are experiencing technical difficulties or have any questions, please don't hesitate to contact us at info@summerseminar2026.hu.",
+    '',
+    'Best regards,',
+    'The Organizing Team'
+  );
 
   const text = textLines.join('\n');
   const html = `
     <h2>Payment link</h2>
-    <p>Hello ${escapeHtml(fullName)},</p>
-    <p>Your previous payment was not completed.</p>
-    <p>Please use this secure payment link to continue:</p>
-    <p><a href="${escapeHtml(retryUrl)}">${escapeHtml(retryUrl)}</a></p>
-    <p><strong>Registration ID:</strong> ${escapeHtml(registrationId)}<br />
-       <strong>Package:</strong> ${escapeHtml(packageLabel)}<br />
-       <strong>Amount:</strong> ${escapeHtml(amount)}${expiresAtText ? `<br /><strong>Link expires at:</strong> ${escapeHtml(expiresAtText)}` : ''}</p>
-    <p>If you have any issue, please contact the Organizing Team at <a href="mailto:info@summerseminar2026.hu">info@summerseminar2026.hu</a>.</p>
-    <p>Best regards,<br />Organizing Team</p>
+    <p>Dear ${escapeHtml(fullName)},</p>
+    <p>We noticed that your recent payment attempt for the Summer Seminar 2026 was not completed.</p>
+    <p>Please note that your registration has been placed on our waiting list until the payment is successfully processed.</p>
+    <p>To secure your spot, please use the secure payment link below to complete your transaction:</p>
+    <p>👉 <a href="${escapeHtml(retryUrl)}">${escapeHtml(retryUrl)}</a></p>
+    <p><strong>Your Registration Details:</strong><br />
+      • Registration ID: ${escapeHtml(registrationId)}<br />
+      • Package: ${escapeHtml(packageLabel)}<br />
+      • Amount Due: ${escapeHtml(amount)}${expiresAtText ? `<br />• Link Expires At: ${escapeHtml(expiresAtText)}` : ''}</p>
+    <p>If you are experiencing technical difficulties or have any questions, please don't hesitate to contact us at <a href="mailto:info@summerseminar2026.hu">info@summerseminar2026.hu</a>.</p>
+    <p>Best regards,<br />The Organizing Team</p>
   `;
 
   return { subject, text, html };
