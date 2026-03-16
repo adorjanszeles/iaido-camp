@@ -11,6 +11,8 @@ const PORT = process.env.PORT || 3000;
 const NODE_ENV = String(process.env.NODE_ENV || 'development').trim().toLowerCase();
 const IS_PRODUCTION = NODE_ENV === 'production';
 const DATA_DIR = path.join(__dirname, 'data');
+const LOGS_DIR = path.join(__dirname, 'logs');
+const ADMIN_EMAIL_JOB_LOG_DIR = path.join(LOGS_DIR, 'admin-email-jobs');
 const DB_FILE = path.join(DATA_DIR, 'camp.db');
 const DB_BACKUP_DIR = (() => {
   const raw = String(process.env.DB_BACKUP_DIR || '').trim();
@@ -94,6 +96,7 @@ const ADMIN_EMAIL_MAX_RECIPIENTS = (() => {
   const raw = Number(process.env.ADMIN_EMAIL_MAX_RECIPIENTS || 500);
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 500;
 })();
+const ADMIN_BULK_EMAIL_DELAY_MS = 5000;
 const EMAIL_REQUEST_TIMEOUT_MS = 8000;
 const APP_SETTING_KEY_PRICING = 'pricing_settings_v1';
 const APP_SETTING_KEY_ADMIN_AUTH = 'admin_auth_v1';
@@ -234,6 +237,7 @@ const HALF_DAY_FIXED_ATTENDANCE_DAY = '2026-08-01';
 const adminLoginFailures = new Map();
 const rateLimitBuckets = new Map();
 let ADMIN_SESSION_SECRET_RUNTIME = '';
+let adminEmailJobState = null;
 
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -1480,6 +1484,266 @@ function insertAdminEmailLog(db, logEntry) {
     String(logEntry?.subject || ''),
     JSON.stringify(Array.isArray(logEntry?.failures) ? logEntry.failures : [])
   );
+}
+
+function ensureAdminEmailJobLogDir() {
+  if (!fs.existsSync(LOGS_DIR)) {
+    fs.mkdirSync(LOGS_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(ADMIN_EMAIL_JOB_LOG_DIR)) {
+    fs.mkdirSync(ADMIN_EMAIL_JOB_LOG_DIR, { recursive: true });
+  }
+}
+
+function getAdminEmailJobLogPath(jobId) {
+  const safeJobId = String(jobId || '').trim();
+  if (!safeJobId) {
+    throw new Error('Admin email job ID is required.');
+  }
+  return path.join(ADMIN_EMAIL_JOB_LOG_DIR, `${safeJobId}.json`);
+}
+
+function writeAdminEmailJobLog(job) {
+  if (!job || !job.id) return;
+
+  ensureAdminEmailJobLogDir();
+  const filePath = getAdminEmailJobLogPath(job.id);
+  const payload = {
+    job: serializeAdminEmailJob(job),
+    deliveries: Array.isArray(job.deliveries) ? job.deliveries : []
+  };
+  const tempPath = `${filePath}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), 'utf8');
+  fs.renameSync(tempPath, filePath);
+}
+
+function persistAdminEmailJobLog(job) {
+  try {
+    writeAdminEmailJobLog(job);
+  } catch (error) {
+    console.error(`Admin email job file log write failed: ${error.message}`);
+  }
+}
+
+function readAdminEmailJobLog(jobId) {
+  try {
+    const filePath = getAdminEmailJobLogPath(jobId);
+    if (!fs.existsSync(filePath)) return null;
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    return {
+      job: parsed?.job && typeof parsed.job === 'object' ? parsed.job : null,
+      deliveries: Array.isArray(parsed?.deliveries) ? parsed.deliveries : []
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isAdminEmailJobActive(job) {
+  const status = String(job?.status || '').trim();
+  return status === 'queued' || status === 'running';
+}
+
+function serializeAdminEmailJob(job) {
+  if (!job) return null;
+
+  return {
+    id: String(job.id || ''),
+    status: String(job.status || ''),
+    createdAt: String(job.createdAt || ''),
+    startedAt: String(job.startedAt || ''),
+    finishedAt: String(job.finishedAt || ''),
+    requestedByIp: String(job.requestedByIp || ''),
+    recipientMode: String(job.recipientMode || ''),
+    templateKey: String(job.templateKey || ''),
+    subject: String(job.subject || ''),
+    totalRecipients: Number(job.totalRecipients || 0),
+    processedCount: Number(job.processedCount || 0),
+    successCount: Number(job.successCount || 0),
+    failedCount: Number(job.failedCount || 0),
+    fatalError: String(job.fatalError || '')
+  };
+}
+
+function getAdminEmailJobApiPayload() {
+  const job = serializeAdminEmailJob(adminEmailJobState);
+  if (!job) {
+    return {
+      job: null,
+      deliveries: []
+    };
+  }
+
+  const fileLog = readAdminEmailJobLog(job.id);
+  const deliveries = Array.isArray(fileLog?.deliveries) ? fileLog.deliveries.slice(-25).reverse() : [];
+
+  return {
+    job,
+    deliveries
+  };
+}
+
+async function runAdminEmailJob(db, job, recipients, subjectTemplate, contentTemplate) {
+  job.status = 'running';
+  job.startedAt = new Date().toISOString();
+  persistAdminEmailJobLog(job);
+
+  const failures = [];
+
+  try {
+    for (let index = 0; index < recipients.length; index += 1) {
+      const registration = recipients[index];
+      const renderedSubject = applyEmailTemplateVariables(subjectTemplate, registration).trim();
+      const renderedText = applyEmailTemplateVariables(contentTemplate, registration).trim();
+
+      if (!renderedSubject || !renderedText) {
+        const errorMessage = 'Rendered message is empty.';
+        const delivery = {
+          id: `mail_delivery_${randomUUID()}`,
+          jobId: job.id,
+          createdAt: new Date().toISOString(),
+          registrationId: registration.id,
+          recipientEmail: registration.email,
+          recipientName: registration.fullName,
+          status: 'FAILED',
+          errorMessage
+        };
+        failures.push({
+          registrationId: registration.id,
+          email: registration.email,
+          error: errorMessage
+        });
+        job.failedCount += 1;
+        job.processedCount += 1;
+        job.deliveries.push(delivery);
+        persistAdminEmailJobLog(job);
+      } else {
+        try {
+          await sendSmtpEmail({
+            toEmail: registration.email,
+            toName: registration.fullName,
+            subject: renderedSubject,
+            textContent: renderedText,
+            htmlContent: plainTextToHtml(renderedText)
+          });
+          const delivery = {
+            id: `mail_delivery_${randomUUID()}`,
+            jobId: job.id,
+            createdAt: new Date().toISOString(),
+            registrationId: registration.id,
+            recipientEmail: registration.email,
+            recipientName: registration.fullName,
+            status: 'SUCCESS',
+            errorMessage: ''
+          };
+          job.successCount += 1;
+          job.processedCount += 1;
+          job.deliveries.push(delivery);
+          persistAdminEmailJobLog(job);
+        } catch (error) {
+          const errorMessage = error.message || 'Unknown email error';
+          const delivery = {
+            id: `mail_delivery_${randomUUID()}`,
+            jobId: job.id,
+            createdAt: new Date().toISOString(),
+            registrationId: registration.id,
+            recipientEmail: registration.email,
+            recipientName: registration.fullName,
+            status: 'FAILED',
+            errorMessage
+          };
+          failures.push({
+            registrationId: registration.id,
+            email: registration.email,
+            error: errorMessage
+          });
+          job.failedCount += 1;
+          job.processedCount += 1;
+          job.deliveries.push(delivery);
+          persistAdminEmailJobLog(job);
+        }
+      }
+
+      if (index < recipients.length - 1) {
+        await sleep(ADMIN_BULK_EMAIL_DELAY_MS);
+      }
+    }
+
+    job.finishedAt = new Date().toISOString();
+    job.status = job.failedCount > 0 ? 'completed_with_failures' : 'completed';
+    persistAdminEmailJobLog(job);
+  } catch (error) {
+    job.finishedAt = new Date().toISOString();
+    job.status = 'failed';
+    job.fatalError = error.message || 'Unknown job error';
+    failures.push({
+      registrationId: '',
+      email: '',
+      error: job.fatalError
+    });
+    persistAdminEmailJobLog(job);
+  }
+
+  try {
+    await runWithSqliteRetry(() => insertAdminEmailLog(db, {
+      requestedByIp: job.requestedByIp,
+      recipientMode: job.recipientMode,
+      recipientCount: job.totalRecipients,
+      successCount: job.successCount,
+      failedCount: job.failedCount,
+      templateKey: job.templateKey,
+      subject: job.subject,
+      failures: failures.slice(0, 50)
+    }));
+  } catch (logError) {
+    console.error(`Admin email summary log write failed: ${logError.message}`);
+  }
+}
+
+function startAdminEmailJob(db, payload) {
+  if (isAdminEmailJobActive(adminEmailJobState)) {
+    throw createError(409, 'Another admin email job is already running.');
+  }
+
+  const job = {
+    id: `mailjob_${randomUUID()}`,
+    status: 'queued',
+    createdAt: new Date().toISOString(),
+    startedAt: '',
+    finishedAt: '',
+    requestedByIp: String(payload.requestedByIp || ''),
+    recipientMode: String(payload.recipientMode || 'selected'),
+    templateKey: String(payload.templateKey || 'custom'),
+    subject: String(payload.subject || ''),
+    totalRecipients: Array.isArray(payload.recipients) ? payload.recipients.length : 0,
+    processedCount: 0,
+    successCount: 0,
+    failedCount: 0,
+    fatalError: '',
+    deliveries: []
+  };
+
+  adminEmailJobState = job;
+  persistAdminEmailJobLog(job);
+
+  setTimeout(() => {
+    runAdminEmailJob(
+      db,
+      job,
+      Array.isArray(payload.recipients) ? payload.recipients : [],
+      String(payload.subject || ''),
+      String(payload.content || '')
+    ).catch((error) => {
+      job.finishedAt = new Date().toISOString();
+      job.status = 'failed';
+      job.fatalError = error.message || 'Unknown job error';
+      persistAdminEmailJobLog(job);
+      console.error(`Admin email job failed: ${job.fatalError}`);
+    });
+  }, 0);
+
+  return job;
 }
 
 function isSzamlazzEnabled() {
@@ -3913,6 +4177,16 @@ function createServer(options = {}) {
       return;
     }
 
+    if (req.method === 'GET' && pathname === '/api/admin/email/job') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      sendJson(res, 200, getAdminEmailJobApiPayload());
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/admin/email/send') {
       if (!isAdminAuthenticated(req, db)) {
         sendJson(res, 401, { error: 'Admin login required.' });
@@ -3988,64 +4262,31 @@ function createServer(options = {}) {
           return;
         }
 
-        const failures = [];
-        let successCount = 0;
-        for (const registration of recipients) {
-          const renderedSubject = applyEmailTemplateVariables(subject, registration).trim();
-          const renderedText = applyEmailTemplateVariables(content, registration).trim();
-          if (!renderedSubject || !renderedText) {
-            failures.push({
-              registrationId: registration.id,
-              email: registration.email,
-              error: 'Rendered message is empty.'
-            });
-            continue;
-          }
-
-          try {
-            await sendSmtpEmail({
-              toEmail: registration.email,
-              toName: registration.fullName,
-              subject: renderedSubject,
-              textContent: renderedText,
-              htmlContent: plainTextToHtml(renderedText)
-            });
-            successCount += 1;
-          } catch (error) {
-            failures.push({
-              registrationId: registration.id,
-              email: registration.email,
-              error: error.message
-            });
-          }
-        }
-
-        const failedCount = failures.length;
+        let job;
         try {
-          await runWithSqliteRetry(() => insertAdminEmailLog(db, {
+          job = startAdminEmailJob(db, {
             requestedByIp: getClientIp(req),
             recipientMode,
-            recipientCount: recipients.length,
-            successCount,
-            failedCount,
             templateKey,
             subject,
-            failures: failures.slice(0, 50)
-          }));
-        } catch (logError) {
-          console.error(`Admin email log write failed: ${logError.message}`);
+            content,
+            recipients
+          });
+        } catch (error) {
+          if (Number(error.statusCode) === 409) {
+            sendJson(res, 409, {
+              error: error.message || 'Another admin email job is already running.',
+              ...getAdminEmailJobApiPayload()
+            });
+            return;
+          }
+          throw error;
         }
 
-        const statusCode = failedCount === 0 ? 200 : successCount > 0 ? 207 : 502;
-        sendJson(res, statusCode, {
-          message: failedCount === 0
-            ? `Email sent successfully to ${successCount} recipient(s).`
-            : `Email sending completed with failures. Success: ${successCount}, Failed: ${failedCount}.`,
-          recipientMode,
-          totalRecipients: recipients.length,
-          successCount,
-          failedCount,
-          failures: failures.slice(0, 20)
+        sendJson(res, 202, {
+          message: `Email job started for ${recipients.length} recipient(s).`,
+          ...getAdminEmailJobApiPayload(),
+          startedJobId: job.id
         });
       } catch (error) {
         if (isSqliteBusyError(error)) {

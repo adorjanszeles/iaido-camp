@@ -23,6 +23,7 @@
   const emailSubjectEl = document.getElementById('email-subject');
   const emailBodyEl = document.getElementById('email-body');
   const emailSendMessageEl = document.getElementById('email-send-message');
+  const emailJobStatusEl = document.getElementById('email-job-status');
   const sendEmailBtn = document.getElementById('send-email-btn');
   const invoiceRowsEl = document.getElementById('invoice-rows');
   const invoiceSearchEl = document.getElementById('invoice-search');
@@ -38,6 +39,8 @@
     maxRecipients: 0
   };
   const selectedEmailRecipientIds = new Set();
+  let currentEmailJob = null;
+  let emailJobPollTimer = null;
 
   const labels = {
     campType: {
@@ -425,6 +428,150 @@
     emailSendMessageEl.textContent = text;
   }
 
+  function isEmailJobRunning(job = currentEmailJob) {
+    const status = String(job?.status || '').trim();
+    return status === 'queued' || status === 'running';
+  }
+
+  function updateSendEmailButtonState() {
+    if (!sendEmailBtn) return;
+
+    if (emailCapabilities.provider === 'disabled') {
+      sendEmailBtn.disabled = true;
+      sendEmailBtn.textContent = 'Send email';
+      return;
+    }
+
+    if (isEmailJobRunning()) {
+      sendEmailBtn.disabled = true;
+      sendEmailBtn.textContent = 'Sending in background...';
+      return;
+    }
+
+    sendEmailBtn.disabled = false;
+    sendEmailBtn.textContent = 'Send email';
+  }
+
+  function stopEmailJobPolling() {
+    if (!emailJobPollTimer) return;
+    window.clearInterval(emailJobPollTimer);
+    emailJobPollTimer = null;
+  }
+
+  function renderEmailJobStatus(job, deliveries) {
+    if (!emailJobStatusEl) return;
+    if (!job) {
+      emailJobStatusEl.innerHTML = '';
+      return;
+    }
+
+    const status = String(job.status || '-');
+    const total = Number(job.totalRecipients || 0);
+    const processed = Number(job.processedCount || 0);
+    const success = Number(job.successCount || 0);
+    const failed = Number(job.failedCount || 0);
+    const startedAt = formatDateTime(job.startedAt || job.createdAt || '');
+    const finishedAt = formatDateTime(job.finishedAt || '');
+    const recentDeliveries = Array.isArray(deliveries) ? deliveries : [];
+
+    const deliveryMarkup = recentDeliveries.length === 0
+      ? '<p class="helper" style="margin: 0.5rem 0 0;">No recipient logs yet.</p>'
+      : `
+        <div style="margin-top: 0.65rem;">
+          <div class="registration-detail-label">Recent recipient logs</div>
+          <div style="display: grid; gap: 0.35rem; margin-top: 0.45rem;">
+            ${recentDeliveries.map((item) => `
+              <div style="padding: 0.45rem 0.6rem; border: 1px solid rgba(0,0,0,0.08); border-radius: 0.6rem;">
+                <strong>${escapeHtml(item.recipientName || item.recipientEmail || '-')}</strong>
+                <span class="helper"> (${escapeHtml(item.recipientEmail || '-')})</span><br />
+                <span class="helper">${escapeHtml(item.status || '-')} at ${escapeHtml(formatDateTime(item.createdAt || ''))}</span>
+                ${item.errorMessage ? `<br /><span class="helper">${escapeHtml(item.errorMessage)}</span>` : ''}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+
+    emailJobStatusEl.innerHTML = `
+      <div class="card" style="margin-top: 0.5rem;">
+        <div class="registration-details-grid">
+          ${renderDetailField('Email job ID', job.id)}
+          ${renderDetailField('Status', status)}
+          ${renderDetailField('Recipient mode', job.recipientMode)}
+          ${renderDetailField('Template', job.templateKey || 'custom')}
+          ${renderDetailField('Subject', job.subject)}
+          ${renderDetailField('Started at', startedAt)}
+          ${renderDetailField('Finished at', finishedAt || '-')}
+          ${renderDetailField('Processed', `${processed} / ${total}`)}
+          ${renderDetailField('Succeeded', String(success))}
+          ${renderDetailField('Failed', String(failed))}
+          ${renderDetailField('Fatal error', job.fatalError || '-')}
+        </div>
+        ${deliveryMarkup}
+      </div>
+    `;
+  }
+
+  function applyEmailJobState(job, deliveries) {
+    const previousStatus = String(currentEmailJob?.status || '').trim();
+    const previousId = String(currentEmailJob?.id || '').trim();
+    currentEmailJob = job || null;
+
+    renderEmailJobStatus(currentEmailJob, deliveries);
+    updateSendEmailButtonState();
+
+    if (isEmailJobRunning(currentEmailJob)) {
+      if (emailCapabilities.provider !== 'disabled') {
+        showEmailMessage('ok', 'Email job is running in the background. Progress is shown below.');
+      }
+      if (!emailJobPollTimer) {
+        emailJobPollTimer = window.setInterval(() => {
+          fetchEmailJobStatus().catch((error) => {
+            showEmailMessage('error', error.message);
+            stopEmailJobPolling();
+          });
+        }, 3000);
+      }
+      return;
+    }
+
+    stopEmailJobPolling();
+
+    if (currentEmailJob && previousId === currentEmailJob.id && (previousStatus === 'queued' || previousStatus === 'running')) {
+      if (currentEmailJob.status === 'completed') {
+        showEmailMessage('ok', `Email job completed successfully. Sent to ${currentEmailJob.successCount} recipient(s).`);
+      } else if (currentEmailJob.status === 'completed_with_failures') {
+        showEmailMessage(
+          'error',
+          `Email job completed with failures. Success: ${currentEmailJob.successCount}, Failed: ${currentEmailJob.failedCount}.`
+        );
+      } else if (currentEmailJob.status === 'failed') {
+        showEmailMessage('error', currentEmailJob.fatalError || 'Email job failed.');
+      }
+      return;
+    }
+
+    if (emailCapabilities.provider !== 'disabled') {
+      showEmailMessage('ok', 'Choose recipients, select a template or custom content, then send.');
+    }
+  }
+
+  async function fetchEmailJobStatus() {
+    const response = await fetch('/api/admin/email/job');
+    if (response.status === 401) {
+      window.location.href = '/admin';
+      return null;
+    }
+
+    const result = await readJsonResponseOrThrow(response);
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to load email job status.');
+    }
+
+    applyEmailJobState(result.job || null, Array.isArray(result.deliveries) ? result.deliveries : []);
+    return result;
+  }
+
   function getEmailRecipientMode() {
     return String(emailRecipientModeEl?.value || 'selected').trim() || 'selected';
   }
@@ -499,6 +646,13 @@
 
     if (emailCapabilities.provider === 'disabled') {
       showEmailMessage('error', 'Email provider is not configured. Set SMTP env values first.');
+      updateSendEmailButtonState();
+      return;
+    }
+
+    if (isEmailJobRunning()) {
+      showEmailMessage('ok', 'Email job is running in the background. Progress is shown below.');
+      updateSendEmailButtonState();
       return;
     }
 
@@ -507,6 +661,7 @@
     } else {
       showEmailMessage('ok', 'Choose recipients, select a template or custom content, then send.');
     }
+    updateSendEmailButtonState();
   }
 
   function populateEmailTemplates(templates) {
@@ -616,12 +771,13 @@
 
   async function loadData() {
     try {
-      const [statsRes, regsRes, pricingRes, emailTemplateRes, invoicesRes] = await Promise.all([
+      const [statsRes, regsRes, pricingRes, emailTemplateRes, invoicesRes, emailJobRes] = await Promise.all([
         fetch('/api/stats'),
         fetch('/api/registrations'),
         fetch('/api/admin/pricing'),
         fetch('/api/admin/email/templates'),
-        fetch('/api/admin/invoices?limit=500')
+        fetch('/api/admin/invoices?limit=500'),
+        fetch('/api/admin/email/job')
       ]);
 
       if (
@@ -629,7 +785,8 @@
         regsRes.status === 401 ||
         pricingRes.status === 401 ||
         emailTemplateRes.status === 401 ||
-        invoicesRes.status === 401
+        invoicesRes.status === 401 ||
+        emailJobRes.status === 401
       ) {
         window.location.href = '/admin';
         return;
@@ -640,8 +797,9 @@
       const pricingData = await pricingRes.json();
       const emailTemplateData = await emailTemplateRes.json();
       const invoicesData = await invoicesRes.json();
+      const emailJobData = await readJsonResponseOrThrow(emailJobRes);
 
-      if (!statsRes.ok || !regsRes.ok || !pricingRes.ok || !emailTemplateRes.ok || !invoicesRes.ok) {
+      if (!statsRes.ok || !regsRes.ok || !pricingRes.ok || !emailTemplateRes.ok || !invoicesRes.ok || !emailJobRes.ok) {
         throw new Error('API error while loading admin data.');
       }
 
@@ -662,15 +820,12 @@
       setEmailSelectionControlsState();
       allInvoices = Array.isArray(invoicesData.invoices) ? invoicesData.invoices : [];
       filterInvoices();
+      applyEmailJobState(emailJobData.job || null, Array.isArray(emailJobData.deliveries) ? emailJobData.deliveries : []);
 
       if (emailCapabilities.provider === 'disabled') {
         showEmailMessage('error', 'Email provider is not configured. Set SMTP env values first.');
-        if (sendEmailBtn) {
-          sendEmailBtn.disabled = true;
-        }
-      } else if (sendEmailBtn) {
-        sendEmailBtn.disabled = false;
       }
+      updateSendEmailButtonState();
     } catch (error) {
       statsEl.innerHTML = `<div class="notice error">${error.message}</div>`;
       rowsEl.innerHTML = '<tr><td colspan="7">Failed to load data.</td></tr>';
@@ -686,6 +841,10 @@
         invoiceRowsEl.innerHTML = '<tr><td colspan="7">Failed to load invoice records.</td></tr>';
       }
       showEmailMessage('error', 'Failed to load email sender data.');
+      if (emailJobStatusEl) {
+        emailJobStatusEl.innerHTML = '';
+      }
+      stopEmailJobPolling();
     }
   }
 
@@ -1040,11 +1199,8 @@
       return;
     }
 
-    if (sendEmailBtn) {
-      sendEmailBtn.disabled = true;
-      sendEmailBtn.textContent = 'Sending...';
-    }
-    showEmailMessage('ok', 'Sending email...');
+    updateSendEmailButtonState();
+    showEmailMessage('ok', 'Starting email job...');
 
     try {
       const response = await fetch('/api/admin/email/send', {
@@ -1068,30 +1224,21 @@
 
       const result = await readJsonResponseOrThrow(response);
 
+      if (response.status === 409) {
+        applyEmailJobState(result.job || null, Array.isArray(result.deliveries) ? result.deliveries : []);
+        throw new Error(result.error || 'Another email job is already running.');
+      }
+
       if (!response.ok) {
         throw new Error(result.error || 'Email sending failed.');
       }
 
-      const failed = Number(result.failedCount || 0);
-      if (failed > 0) {
-        const firstFailure = Array.isArray(result.failures) && result.failures.length
-          ? ` First failure: ${result.failures[0].email} (${result.failures[0].error})`
-          : '';
-        showEmailMessage(
-          'error',
-          `${result.message || 'Email sent with partial failures.'}${firstFailure}`
-        );
-        return;
-      }
-
-      showEmailMessage('ok', result.message || 'Email sent successfully.');
+      applyEmailJobState(result.job || null, Array.isArray(result.deliveries) ? result.deliveries : []);
+      showEmailMessage('ok', result.message || 'Email job started successfully.');
     } catch (error) {
       showEmailMessage('error', error.message);
     } finally {
-      if (sendEmailBtn) {
-        sendEmailBtn.disabled = false;
-        sendEmailBtn.textContent = 'Send email';
-      }
+      updateSendEmailButtonState();
     }
   }
 
