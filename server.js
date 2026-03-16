@@ -1904,6 +1904,13 @@ async function createInvoiceForRegistration(db, registrationId, options = {}) {
   }
 }
 
+function isSeniorDanGrade(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === '6. dan' || normalized === '6 dan' ||
+    normalized === '7. dan' || normalized === '7 dan' ||
+    normalized === '8. dan' || normalized === '8 dan';
+}
+
 function buildRegistrationEmailContent(registration, pricing) {
   const participantNamePlain = String(registration.fullName || '').trim() || 'Participant';
   const participantName = escapeHtml(participantNamePlain);
@@ -1912,39 +1919,63 @@ function buildRegistrationEmailContent(registration, pricing) {
   const total = escapeHtml(formatCurrency(totalRaw, pricing.currency));
   const manageUrl = `${APP_BASE_URL}/admin`;
   const seminarDateLabel = '30 July - 3 August 2026 (Iaido & Jodo)';
+  const useSeniorTemplate = isSeniorDanGrade(registration.currentGradeIaido) || isSeniorDanGrade(registration.currentGradeJodo);
 
-  const participantHtml = `
-    <h2>Successful Registration</h2>
-    <p>Dear ${participantName},</p>
-    <p>Thank you for registering for the Ishido Sensei Summer Seminar 2026. We are pleased to inform you that your registration and payment have been successfully processed.</p>
-    <h3>Event Details</h3>
-    <ul>
-      <li><strong>Venue:</strong> Ludovika Arena, Budapest</li>
-      <li><strong>Date:</strong> ${escapeHtml(seminarDateLabel)}</li>
-      <li><strong>Registration ID:</strong> #${registrationId}</li>
-    </ul>
-    <p>Please have this email ready (digital or printed) upon arrival for a smooth check-in process. We will soon send out the detailed schedule and further practical information.</p>
-    <p>We look forward to seeing you in the dojo.</p>
-    <p>Best regards,<br />The Organizing Team</p>
-  `;
+  const participantHtml = useSeniorTemplate
+    ? `
+      <h2>Successful Registration</h2>
+      <p>Dear ${participantName},</p>
+      <p>Thank you for your registration. We are writing to confirm that your payment has been received and your place at the Summer Seminar is fully secured.</p>
+      <p>We are very glad that you are joining us. Having practitioners of your level attend naturally elevates the quality of the seminar and brings great value to the practice.</p>
+      <p>Furthermore, your participation directly supports the realization of this event. We highly appreciate this backing, as it shows the strength of our community coming together to make these seminars happen.</p>
+      <p>We look forward to seeing you on the Summer Seminar.</p>
+      <p>Best regards,<br />The Organizing Team</p>
+    `
+    : `
+      <h2>Successful Registration</h2>
+      <p>Dear ${participantName},</p>
+      <p>Thank you for registering for the Ishido Sensei Summer Seminar 2026. We are pleased to inform you that your registration and payment have been successfully processed.</p>
+      <h3>Event Details</h3>
+      <ul>
+        <li><strong>Venue:</strong> Ludovika Arena, Budapest</li>
+        <li><strong>Date:</strong> ${escapeHtml(seminarDateLabel)}</li>
+        <li><strong>Registration ID:</strong> #${registrationId}</li>
+      </ul>
+      <p>Please have this email ready (digital or printed) upon arrival for a smooth check-in process. We will soon send out the detailed schedule and further practical information.</p>
+      <p>We look forward to seeing you in the dojo.</p>
+      <p>Best regards,<br />The Organizing Team</p>
+    `;
 
-  const participantText = [
-    'Successful Registration',
-    '',
-    `Dear ${participantNamePlain},`,
-    'Thank you for registering for the Ishido Sensei Summer Seminar 2026. We are pleased to inform you that your registration and payment have been successfully processed.',
-    '',
-    'Event Details:',
-    '- Venue: Ludovika Arena, Budapest',
-    `- Date: ${seminarDateLabel}`,
-    `- Registration ID: #${registration.id}`,
-    '',
-    'Please have this email ready (digital or printed) upon arrival for a smooth check-in process. We will soon send out the detailed schedule and further practical information.',
-    'We look forward to seeing you in the dojo.',
-    '',
-    'Best regards,',
-    'The Organizing Team'
-  ].join('\n');
+  const participantText = useSeniorTemplate
+    ? [
+      'Successful Registration',
+      '',
+      `Dear ${participantNamePlain},`,
+      'Thank you for your registration. We are writing to confirm that your payment has been received and your place at the Summer Seminar is fully secured.',
+      'We are very glad that you are joining us. Having practitioners of your level attend naturally elevates the quality of the seminar and brings great value to the practice.',
+      'Furthermore, your participation directly supports the realization of this event. We highly appreciate this backing, as it shows the strength of our community coming together to make these seminars happen.',
+      'We look forward to seeing you on the Summer Seminar.',
+      '',
+      'Best regards,',
+      'The Organizing Team'
+    ].join('\n')
+    : [
+      'Successful Registration',
+      '',
+      `Dear ${participantNamePlain},`,
+      'Thank you for registering for the Ishido Sensei Summer Seminar 2026. We are pleased to inform you that your registration and payment have been successfully processed.',
+      '',
+      'Event Details:',
+      '- Venue: Ludovika Arena, Budapest',
+      `- Date: ${seminarDateLabel}`,
+      `- Registration ID: #${registration.id}`,
+      '',
+      'Please have this email ready (digital or printed) upon arrival for a smooth check-in process. We will soon send out the detailed schedule and further practical information.',
+      'We look forward to seeing you in the dojo.',
+      '',
+      'Best regards,',
+      'The Organizing Team'
+    ].join('\n');
 
   const adminHtml = `
     <h2>New Registration</h2>
