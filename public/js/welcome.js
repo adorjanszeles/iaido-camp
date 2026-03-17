@@ -6,10 +6,10 @@
   if (!countdownEl) return;
 
   const seminarStartUtc = Date.parse('2026-07-30T07:00:00Z');
-  const countryRotationIntervalMs = 1150;
-  const countrySlideDurationMs = 380;
-  let countryRotationTimer = null;
-  let countryRotationInProgress = false;
+  const countryPixelsPerSecond = 44;
+  let countryAnimationFrameId = 0;
+  let countryLastFrameAt = 0;
+  let countryOffsetPx = 0;
 
   function escapeHtml(value) {
     return String(value ?? '')
@@ -39,47 +39,58 @@
   }
 
   function stopCountryRotation() {
-    if (countryRotationTimer) {
-      window.clearInterval(countryRotationTimer);
-      countryRotationTimer = null;
+    if (countryAnimationFrameId) {
+      window.cancelAnimationFrame(countryAnimationFrameId);
+      countryAnimationFrameId = 0;
     }
-    countryRotationInProgress = false;
+    countryLastFrameAt = 0;
   }
 
-  function rotateCountriesOnce() {
-    if (!joiningCountryListEl || countryRotationInProgress) return;
-    const firstChip = joiningCountryListEl.firstElementChild;
-    if (!firstChip || joiningCountryListEl.children.length < 2) return;
-
+  function getCountryGapPx() {
     const listStyles = window.getComputedStyle(joiningCountryListEl);
-    const gap = parseFloat(listStyles.gap || listStyles.columnGap || '0') || 0;
-    const travelDistance = firstChip.getBoundingClientRect().width + gap;
-    if (!travelDistance) return;
+    return parseFloat(listStyles.gap || listStyles.columnGap || '0') || 0;
+  }
 
-    countryRotationInProgress = true;
-    joiningCountryListEl.style.transition = `transform ${countrySlideDurationMs}ms ease`;
-    joiningCountryListEl.style.transform = `translateX(-${travelDistance}px)`;
+  function animateCountries(frameAt) {
+    if (!joiningCountryListEl || !joiningCountryMarqueeEl) return;
 
-    window.setTimeout(() => {
-      joiningCountryListEl.style.transition = 'none';
-      joiningCountryListEl.style.transform = 'translateX(0)';
+    if (!countryLastFrameAt) {
+      countryLastFrameAt = frameAt;
+    }
+
+    const deltaSeconds = Math.max(0, (frameAt - countryLastFrameAt) / 1000);
+    countryLastFrameAt = frameAt;
+    countryOffsetPx += deltaSeconds * countryPixelsPerSecond;
+
+    const gap = getCountryGapPx();
+    while (joiningCountryListEl.children.length > 1) {
+      const firstChip = joiningCountryListEl.firstElementChild;
+      if (!firstChip) break;
+
+      const travelDistance = firstChip.getBoundingClientRect().width + gap;
+      if (!travelDistance || countryOffsetPx < travelDistance) break;
+
+      countryOffsetPx -= travelDistance;
       joiningCountryListEl.appendChild(firstChip);
-      countryRotationInProgress = false;
-    }, countrySlideDurationMs);
+    }
+
+    joiningCountryListEl.style.transform = `translateX(-${countryOffsetPx}px)`;
+    countryAnimationFrameId = window.requestAnimationFrame(animateCountries);
   }
 
   function syncCountryRotation() {
     if (!joiningCountryListEl || !joiningCountryMarqueeEl) return;
 
     stopCountryRotation();
-    joiningCountryListEl.style.transition = 'none';
+    countryOffsetPx = 0;
     joiningCountryListEl.style.transform = 'translateX(0)';
 
-    const shouldRotate = joiningCountryListEl.scrollWidth > joiningCountryMarqueeEl.clientWidth + 4;
+    const shouldRotate = joiningCountryListEl.children.length > 1
+      && joiningCountryListEl.scrollWidth > joiningCountryMarqueeEl.clientWidth + 4;
     joiningCountryListEl.classList.toggle('is-static', !shouldRotate);
 
     if (shouldRotate) {
-      countryRotationTimer = window.setInterval(rotateCountriesOnce, countryRotationIntervalMs);
+      countryAnimationFrameId = window.requestAnimationFrame(animateCountries);
     }
   }
 
