@@ -207,6 +207,7 @@ const PRICE_CATALOG = {
     guesthouse: { label: 'Guesthouse', defaultAmount: 135 }
   }
 };
+const COUNTRY_REGION_CODES = Object.freeze(['AD', 'AE', 'AF', 'AG', 'AI', 'AL', 'AM', 'AO', 'AQ', 'AR', 'AS', 'AT', 'AU', 'AW', 'AX', 'AZ', 'BA', 'BB', 'BD', 'BE', 'BF', 'BG', 'BH', 'BI', 'BJ', 'BL', 'BM', 'BN', 'BO', 'BQ', 'BR', 'BS', 'BT', 'BV', 'BW', 'BY', 'BZ', 'CA', 'CC', 'CD', 'CF', 'CG', 'CH', 'CI', 'CK', 'CL', 'CM', 'CN', 'CO', 'CR', 'CU', 'CV', 'CW', 'CX', 'CY', 'CZ', 'DE', 'DJ', 'DK', 'DM', 'DO', 'DZ', 'EC', 'EE', 'EG', 'EH', 'ER', 'ES', 'ET', 'FI', 'FJ', 'FK', 'FM', 'FO', 'FR', 'GA', 'GB', 'GD', 'GE', 'GF', 'GG', 'GH', 'GI', 'GL', 'GM', 'GN', 'GP', 'GQ', 'GR', 'GS', 'GT', 'GU', 'GW', 'GY', 'HK', 'HM', 'HN', 'HR', 'HT', 'HU', 'ID', 'IE', 'IL', 'IM', 'IN', 'IO', 'IQ', 'IR', 'IS', 'IT', 'JE', 'JM', 'JO', 'JP', 'KE', 'KG', 'KH', 'KI', 'KM', 'KN', 'KP', 'KR', 'KW', 'KY', 'KZ', 'LA', 'LB', 'LC', 'LI', 'LK', 'LR', 'LS', 'LT', 'LU', 'LV', 'LY', 'MA', 'MC', 'MD', 'ME', 'MF', 'MG', 'MH', 'MK', 'ML', 'MM', 'MN', 'MO', 'MP', 'MQ', 'MR', 'MS', 'MT', 'MU', 'MV', 'MW', 'MX', 'MY', 'MZ', 'NA', 'NC', 'NE', 'NF', 'NG', 'NI', 'NL', 'NO', 'NP', 'NR', 'NU', 'NZ', 'OM', 'PA', 'PE', 'PF', 'PG', 'PH', 'PK', 'PL', 'PM', 'PN', 'PR', 'PS', 'PT', 'PW', 'PY', 'QA', 'RE', 'RO', 'RS', 'RU', 'RW', 'SA', 'SB', 'SC', 'SD', 'SE', 'SG', 'SH', 'SI', 'SJ', 'SK', 'SL', 'SM', 'SN', 'SO', 'SR', 'SS', 'ST', 'SV', 'SX', 'SY', 'SZ', 'TC', 'TD', 'TF', 'TG', 'TH', 'TJ', 'TK', 'TL', 'TM', 'TN', 'TO', 'TR', 'TT', 'TV', 'TW', 'TZ', 'UA', 'UG', 'UM', 'US', 'UY', 'UZ', 'VA', 'VC', 'VE', 'VG', 'VI', 'VN', 'VU', 'WF', 'WS', 'YE', 'YT', 'ZA', 'ZM', 'ZW']);
 const REGION_DISPLAY_NAMES = typeof Intl.DisplayNames === 'function'
   ? new Intl.DisplayNames(['en'], { type: 'region' })
   : null;
@@ -261,6 +262,8 @@ const COUNTRY_CODE_ALIASES = {
   unitedstatesofamerica: 'US',
   usa: 'US'
 };
+const COUNTRY_NAME_TO_CODE = buildCountryNameToCodeMap();
+const COUNTRY_OPTIONS = buildCountryOptions();
 const CAMP_TYPE_DISCIPLINE_MATRIX = {
   full_seminar: { iaido: true, jodo: true },
   jodo_part_only: { iaido: false, jodo: true },
@@ -770,6 +773,28 @@ function normalizeCountryLookupKey(value) {
     .replace(/[^a-z]/g, '');
 }
 
+function buildCountryNameToCodeMap() {
+  const entries = new Map();
+  for (const code of COUNTRY_REGION_CODES) {
+    const label = getCountryLabel(code, code);
+    const normalized = normalizeCountryLookupKey(label);
+    if (normalized && !entries.has(normalized)) {
+      entries.set(normalized, code);
+    }
+  }
+  return entries;
+}
+
+function buildCountryOptions() {
+  return COUNTRY_REGION_CODES
+    .map((code) => ({
+      code,
+      name: getCountryLabel(code, code)
+    }))
+    .filter((item) => item.name)
+    .sort((left, right) => left.name.localeCompare(right.name, 'en', { sensitivity: 'base' }));
+}
+
 function getCountryCodeFromValue(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -782,7 +807,7 @@ function getCountryCodeFromValue(value) {
   if (/^[A-Za-z]{2}$/.test(raw)) {
     return raw.toUpperCase();
   }
-  return '';
+  return COUNTRY_NAME_TO_CODE.get(normalized) || '';
 }
 
 function countryCodeToFlagEmoji(code) {
@@ -805,9 +830,22 @@ function getCountryLabel(rawValue, countryCode) {
   const normalizedCode = String(countryCode || '').trim().toUpperCase();
   if (normalizedCode && REGION_DISPLAY_NAMES) {
     const label = REGION_DISPLAY_NAMES.of(normalizedCode);
-    if (label) return label;
+    if (label && label !== normalizedCode) return label;
   }
   return String(rawValue || '').trim();
+}
+
+function normalizeBillingCountry(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return { code: '', label: '' };
+
+  const code = getCountryCodeFromValue(raw);
+  if (!code) return { code: '', label: raw };
+
+  return {
+    code,
+    label: getCountryLabel(raw, code) || raw
+  };
 }
 
 function getPublicRegistrationCountries(registrations) {
@@ -843,7 +881,7 @@ function getPublicRegistrationCountries(registrations) {
   }
 
   return Array.from(deduped.values())
-    .filter((item) => item.name)
+    .filter((item) => item.name && item.flagUrl)
     .sort((left, right) => {
       if (left.code === 'JP' && right.code !== 'JP') return -1;
       if (right.code === 'JP' && left.code !== 'JP') return 1;
@@ -3398,7 +3436,7 @@ function sanitizePayload(payload, pricingSettings = DEFAULT_PRICING_SETTINGS) {
     billingZip: String(payload.billingZip || '').trim(),
     billingCity: String(payload.billingCity || '').trim(),
     billingAddress: String(payload.billingAddress || '').trim(),
-    billingCountry: String(payload.billingCountry || 'Hungary').trim(),
+    billingCountry: normalizeBillingCountry(payload.billingCountry || 'HU').label || 'Hungary',
     foodNotes: String(payload.foodNotes || '').trim(),
     privacyConsent: Boolean(payload.privacyConsent),
     termsConsent: Boolean(payload.termsConsent)
@@ -3478,7 +3516,11 @@ function validateRegistration(data, pricingSettings = DEFAULT_PRICING_SETTINGS) 
   if (!isValidPostalCode(data.billingZip)) errors.push('Billing postal code format is invalid.');
   if (!isNonEmptyString(data.billingCity)) errors.push('Billing city is required.');
   if (!isNonEmptyString(data.billingAddress)) errors.push('Billing address is required.');
-  if (!isNonEmptyString(data.billingCountry)) errors.push('Billing country is required.');
+  if (!isNonEmptyString(data.billingCountry)) {
+    errors.push('Billing country is required.');
+  } else if (!normalizeBillingCountry(data.billingCountry).code) {
+    errors.push('Please select a valid billing country.');
+  }
   if (String(data.foodNotes || '').length > 4000) errors.push('Note cannot exceed 4000 characters.');
   if (!data.privacyConsent) errors.push('Privacy consent is required.');
   if (!data.termsConsent) errors.push('Accepting participation terms is required.');
@@ -4262,6 +4304,13 @@ function createServer(options = {}) {
         pricing: buildPublicPricingConfig(pricingSettings, pricingNow),
         pricingMeta,
         currency: 'EUR'
+      });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/public/country-options') {
+      sendJson(res, 200, {
+        countries: COUNTRY_OPTIONS
       });
       return;
     }

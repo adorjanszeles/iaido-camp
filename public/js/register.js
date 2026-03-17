@@ -15,6 +15,7 @@
   const attendanceDayWrapEl = document.getElementById('attendanceDayWrap');
   const attendanceDayEl = document.getElementById('attendanceDay');
   const halfDayFixedNoticeEl = document.getElementById('halfDayFixedNotice');
+  const billingCountryEl = document.getElementById('billingCountry');
   const priceLinesEl = document.getElementById('price-lines');
   const priceTotalEl = document.getElementById('price-total');
   const pricingTierNoteEl = document.getElementById('pricing-tier-note');
@@ -107,6 +108,46 @@
       minimumFractionDigits: 2,
       maximumFractionDigits: 2
     }).format(Number(value || 0));
+  }
+
+  function populateCountryOptions(countries) {
+    if (!billingCountryEl || !Array.isArray(countries) || countries.length === 0) return;
+
+    const previousValue = String(billingCountryEl.value || 'HU').trim().toUpperCase();
+    const options = countries
+      .filter((item) => item && item.code && item.name)
+      .slice()
+      .sort((left, right) => String(left.name).localeCompare(String(right.name), 'en', { sensitivity: 'base' }));
+
+    billingCountryEl.innerHTML = '';
+    for (const country of options) {
+      const option = document.createElement('option');
+      option.value = String(country.code).trim().toUpperCase();
+      option.textContent = String(country.name).trim();
+      billingCountryEl.appendChild(option);
+    }
+
+    const nextValue = options.some((item) => String(item.code).toUpperCase() === previousValue)
+      ? previousValue
+      : (options.some((item) => String(item.code).toUpperCase() === 'HU') ? 'HU' : String(options[0]?.code || ''));
+    if (nextValue) billingCountryEl.value = nextValue;
+  }
+
+  async function loadCountryOptions() {
+    if (!billingCountryEl) return;
+
+    try {
+      const response = await fetch('/api/public/country-options');
+      if (!response.ok) {
+        throw new Error('Country options request failed.');
+      }
+
+      const result = await response.json();
+      const countries = Array.isArray(result?.countries) ? result.countries : [];
+      populateCountryOptions(countries);
+    } catch {
+      billingCountryEl.innerHTML = '<option value="HU" selected>Hungary</option>';
+    }
   }
 
   function formatIsoDateForUi(value) {
@@ -458,4 +499,5 @@
   syncExamFields();
   syncAttendanceDayField();
   loadPricingConfig();
+  loadCountryOptions();
 })();

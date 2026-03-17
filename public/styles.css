@@ -114,8 +114,8 @@ a {
 
 .joining-countries {
   width: min(980px, 100%);
-  margin: 0.35rem auto 1rem;
-  padding: 0.95rem 1rem 1rem;
+  margin: 0.9rem auto 0.9rem;
+  padding: 0.85rem 0.95rem 0.95rem;
   border: 1px solid rgba(36, 78, 118, 0.16);
   border-radius: 16px;
   background: linear-gradient(180deg, rgba(245, 250, 255, 0.94) 0%, rgba(231, 240, 250, 0.92) 100%);
@@ -125,52 +125,62 @@ a {
 }
 
 .joining-countries-intro {
-  margin: 0 0 0.8rem;
+  margin: 0 0 0.7rem;
   color: #274868;
   font-family: "Palatino Linotype", "Book Antiqua", serif;
-  font-size: 1.02rem;
+  font-size: 0.98rem;
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.joining-country-marquee {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  mask-image: linear-gradient(to right, transparent 0, black 6%, black 94%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0, black 6%, black 94%, transparent 100%);
 }
 
 .joining-country-list {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  width: max-content;
+  will-change: transform;
+}
+
+.joining-country-list.is-static {
+  width: 100%;
   justify-content: center;
-  gap: 0.55rem 0.6rem;
 }
 
 .joining-country-chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.44rem 0.72rem;
-  border-radius: 999px;
+  justify-content: center;
+  width: 3.1rem;
+  height: 2.2rem;
+  border-radius: 12px;
   border: 1px solid rgba(39, 72, 104, 0.14);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(222, 235, 249, 0.92) 100%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(222, 235, 249, 0.92) 100%);
   box-shadow: 0 6px 14px rgba(20, 49, 78, 0.08);
+  flex: 0 0 auto;
 }
 
 .joining-country-flag {
-  font-size: 1.36rem;
+  font-size: 1.42rem;
   line-height: 1;
 }
 
 .joining-country-flag-image {
   display: block;
-  width: 1.85rem;
-  height: 1.3rem;
-  border-radius: 3px;
+  width: 2.15rem;
+  height: 1.5rem;
+  border-radius: 4px;
   box-shadow: 0 2px 5px rgba(20, 49, 78, 0.14);
   object-fit: cover;
   flex: 0 0 auto;
-}
-
-.joining-country-name {
-  color: #274868;
-  font-size: 0.93rem;
-  font-weight: 700;
-  letter-spacing: 0.01em;
 }
 
 .hero-kicker {
@@ -852,6 +862,25 @@ footer {
   .joining-countries {
     padding-left: 0.8rem;
     padding-right: 0.8rem;
+  }
+
+  .joining-countries-intro {
+    font-size: 0.84rem;
+  }
+
+  .joining-country-list {
+    gap: 0.6rem;
+  }
+
+  .joining-country-chip {
+    width: 2.75rem;
+    height: 1.95rem;
+    border-radius: 10px;
+  }
+
+  .joining-country-flag-image {
+    width: 1.92rem;
+    height: 1.34rem;
   }
 
   .welcome-overview {
