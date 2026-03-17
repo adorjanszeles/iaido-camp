@@ -207,6 +207,60 @@ const PRICE_CATALOG = {
     guesthouse: { label: 'Guesthouse', defaultAmount: 135 }
   }
 };
+const REGION_DISPLAY_NAMES = typeof Intl.DisplayNames === 'function'
+  ? new Intl.DisplayNames(['en'], { type: 'region' })
+  : null;
+const FLAG_CDN_BASE_URL = 'https://flagcdn.com';
+const COUNTRY_CODE_ALIASES = {
+  australia: 'AU',
+  austria: 'AT',
+  belgium: 'BE',
+  bosniaandherzegovina: 'BA',
+  brazil: 'BR',
+  bulgaria: 'BG',
+  canada: 'CA',
+  china: 'CN',
+  croatia: 'HR',
+  czechia: 'CZ',
+  czechrepublic: 'CZ',
+  denmark: 'DK',
+  estonia: 'EE',
+  finland: 'FI',
+  france: 'FR',
+  germany: 'DE',
+  greatbritain: 'GB',
+  greece: 'GR',
+  hungary: 'HU',
+  india: 'IN',
+  ireland: 'IE',
+  israel: 'IL',
+  italy: 'IT',
+  japan: 'JP',
+  latvia: 'LV',
+  lithuania: 'LT',
+  luxembourg: 'LU',
+  magyarorszag: 'HU',
+  netherlands: 'NL',
+  newzealand: 'NZ',
+  norway: 'NO',
+  poland: 'PL',
+  portugal: 'PT',
+  romania: 'RO',
+  serbia: 'RS',
+  slovakia: 'SK',
+  slovenia: 'SI',
+  southkorea: 'KR',
+  spain: 'ES',
+  sweden: 'SE',
+  switzerland: 'CH',
+  taiwan: 'TW',
+  uk: 'GB',
+  ukraine: 'UA',
+  unitedkingdom: 'GB',
+  unitedstates: 'US',
+  unitedstatesofamerica: 'US',
+  usa: 'US'
+};
 const CAMP_TYPE_DISCIPLINE_MATRIX = {
   full_seminar: { iaido: true, jodo: true },
   jodo_part_only: { iaido: false, jodo: true },
@@ -705,6 +759,96 @@ function formatCurrency(value, currency = 'EUR') {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   }).format(Number(value || 0));
+}
+
+function normalizeCountryLookupKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z]/g, '');
+}
+
+function getCountryCodeFromValue(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  const normalized = normalizeCountryLookupKey(raw);
+  if (!normalized) return '';
+  if (Object.prototype.hasOwnProperty.call(COUNTRY_CODE_ALIASES, normalized)) {
+    return COUNTRY_CODE_ALIASES[normalized];
+  }
+  if (/^[A-Za-z]{2}$/.test(raw)) {
+    return raw.toUpperCase();
+  }
+  return '';
+}
+
+function countryCodeToFlagEmoji(code) {
+  const normalized = String(code || '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(normalized)) return '';
+
+  return String.fromCodePoint(
+    normalized.charCodeAt(0) + 127397,
+    normalized.charCodeAt(1) + 127397
+  );
+}
+
+function getCountryFlagUrl(code) {
+  const normalized = String(code || '').trim().toLowerCase();
+  if (!/^[a-z]{2}$/.test(normalized)) return '';
+  return `${FLAG_CDN_BASE_URL}/${normalized}.svg`;
+}
+
+function getCountryLabel(rawValue, countryCode) {
+  const normalizedCode = String(countryCode || '').trim().toUpperCase();
+  if (normalizedCode && REGION_DISPLAY_NAMES) {
+    const label = REGION_DISPLAY_NAMES.of(normalizedCode);
+    if (label) return label;
+  }
+  return String(rawValue || '').trim();
+}
+
+function getPublicRegistrationCountries(registrations) {
+  const deduped = new Map();
+  deduped.set('JP', {
+    code: 'JP',
+    name: getCountryLabel('Japan', 'JP'),
+    flagUrl: getCountryFlagUrl('JP'),
+    flagFallback: countryCodeToFlagEmoji('JP')
+  });
+
+  const activeRegistrations = Array.isArray(registrations)
+    ? registrations.filter((item) => {
+      const status = String(item?.status || '').trim().toUpperCase();
+      return status !== 'DELETED' && status !== 'ANONYMIZED';
+    })
+    : [];
+
+  for (const registration of activeRegistrations) {
+    const rawCountry = String(registration?.billingCountry || '').trim();
+    if (!rawCountry) continue;
+
+    const code = getCountryCodeFromValue(rawCountry);
+    const dedupeKey = code || normalizeCountryLookupKey(rawCountry);
+    if (!dedupeKey || deduped.has(dedupeKey)) continue;
+
+    deduped.set(dedupeKey, {
+      code,
+      name: getCountryLabel(rawCountry, code),
+      flagUrl: getCountryFlagUrl(code),
+      flagFallback: countryCodeToFlagEmoji(code) || '🌏'
+    });
+  }
+
+  return Array.from(deduped.values())
+    .filter((item) => item.name)
+    .sort((left, right) => {
+      if (left.code === 'JP' && right.code !== 'JP') return -1;
+      if (right.code === 'JP' && left.code !== 'JP') return 1;
+      return left.name.localeCompare(right.name, 'en', { sensitivity: 'base' });
+    });
 }
 
 function escapeHtml(value) {
@@ -3781,7 +3925,7 @@ function getSecurityHeadersForRequest(pathname) {
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data:",
+    `img-src 'self' data: ${FLAG_CDN_BASE_URL}`,
     "font-src 'self' data:",
     "connect-src 'self'",
     "object-src 'none'",
@@ -4158,6 +4302,12 @@ function createServer(options = {}) {
 
     if (req.method === 'GET' && pathname === '/api/admin/session') {
       sendJson(res, 200, { authenticated: isAdminAuthenticated(req, db) });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/public/countries') {
+      const registrations = readRegistrations(db);
+      sendJson(res, 200, { countries: getPublicRegistrationCountries(registrations) });
       return;
     }
 
