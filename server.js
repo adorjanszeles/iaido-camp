@@ -4239,6 +4239,7 @@ function getStaticFilePath(urlPath) {
     '/program': 'program.html',
     '/faq': 'faq.html',
     '/info': 'info.html',
+    '/senseis': 'senseis.html',
     '/payment-success': 'payment-success.html',
     '/payment-cancel': 'payment-cancel.html',
     '/privacy': 'privacy.html',

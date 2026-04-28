@@ -294,6 +294,144 @@ a {
   font-weight: 700;
 }
 
+.senseis-page {
+  padding-top: 1rem;
+}
+
+.sensei-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.34fr) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+  margin: 1rem 0 2rem;
+}
+
+.sensei-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(248, 251, 255, 0.96) 0%, rgba(234, 244, 254, 0.92) 100%);
+  box-shadow: 0 10px 26px rgba(12, 37, 62, 0.08);
+}
+
+.sensei-menu-button {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  padding: 0.72rem 0.85rem;
+  background: transparent;
+  color: var(--accent-strong);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sensei-menu-button:hover,
+.sensei-menu-button.active {
+  border-color: rgba(31, 79, 131, 0.24);
+  background: rgba(215, 231, 249, 0.8);
+}
+
+.sensei-panels {
+  min-width: 0;
+}
+
+.sensei-panel {
+  min-height: 360px;
+  padding: 1.35rem;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background:
+    linear-gradient(160deg, rgba(248, 251, 255, 0.98) 0%, rgba(238, 245, 253, 0.94) 100%);
+  box-shadow: var(--shadow);
+  animation: fade-up 0.35s ease both;
+}
+
+.sensei-panel h2 {
+  margin: 0.15rem 0 1rem;
+  font-family: "Palatino Linotype", "Book Antiqua", serif;
+  font-size: clamp(1.7rem, 4vw, 2.55rem);
+  color: var(--accent-strong);
+}
+
+.sensei-kicker {
+  margin: 0;
+  color: var(--hungarian-red);
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.sensei-data {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+}
+
+.sensei-data div {
+  padding: 0.85rem;
+  border: 1px solid rgba(31, 79, 131, 0.16);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.sensei-data dt {
+  margin: 0 0 0.22rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sensei-data dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.sensei-bio {
+  color: var(--muted);
+  line-height: 1.66;
+}
+
+.sensei-bio p {
+  margin: 0.72rem 0;
+}
+
+.sensei-bio-image {
+  width: min(275px, 42%);
+  margin: 0.25rem 0 0.85rem;
+  overflow: hidden;
+  border: 1px solid rgba(31, 79, 131, 0.18);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 10px 24px rgba(12, 37, 62, 0.12);
+}
+
+.sensei-bio-image-right {
+  float: right;
+  margin-left: 1.1rem;
+}
+
+.sensei-bio-image-left {
+  float: left;
+  margin-right: 1.1rem;
+}
+
+.sensei-bio-image img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
 .hero {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -841,6 +979,7 @@ footer {
 
 @media (max-width: 860px) {
   .hero,
+  .sensei-layout,
   .grid-2,
   .form-grid,
   .home-cards,
@@ -885,5 +1024,34 @@ footer {
 
   .welcome-overview {
     padding: 0.9rem 0.8rem 0.2rem;
+  }
+
+  .sensei-menu {
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 0.7rem;
+  }
+
+  .sensei-menu-button {
+    flex: 0 0 auto;
+    width: auto;
+    white-space: nowrap;
+  }
+
+  .sensei-panel {
+    min-height: 0;
+    padding: 1.05rem;
+  }
+
+  .sensei-data {
+    grid-template-columns: 1fr;
+  }
+
+  .sensei-bio-image,
+  .sensei-bio-image-left,
+  .sensei-bio-image-right {
+    float: none;
+    width: 100%;
+    margin: 0.85rem 0;
   }
 }
