@@ -318,6 +318,7 @@ a {
 }
 
 .sensei-menu-button {
+  display: block;
   width: 100%;
   border: 1px solid transparent;
   border-radius: 12px;
@@ -326,6 +327,7 @@ a {
   color: var(--accent-strong);
   font: inherit;
   font-weight: 700;
+  text-decoration: none;
   text-align: left;
   cursor: pointer;
 }
