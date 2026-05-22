@@ -27,12 +27,21 @@
   const sendEmailBtn = document.getElementById('send-email-btn');
   const invoiceRowsEl = document.getElementById('invoice-rows');
   const invoiceSearchEl = document.getElementById('invoice-search');
+  const invoiceTypeFilterEl = document.getElementById('invoice-type-filter');
   const invoiceSearchMetaEl = document.getElementById('invoice-search-meta');
   const registrationSearchEl = document.getElementById('registration-search');
   const registrationStatusFilterEl = document.getElementById('registration-status-filter');
   const registrationSearchMetaEl = document.getElementById('registration-search-meta');
+  const cateringOrderRowsEl = document.getElementById('catering-order-rows');
+  const cateringOrderSearchEl = document.getElementById('catering-order-search');
+  const cateringOrderStatusFilterEl = document.getElementById('catering-order-status-filter');
+  const cateringOrderSearchMetaEl = document.getElementById('catering-order-search-meta');
+  const cateringInviteMetaEl = document.getElementById('catering-invite-meta');
+  const sendAllCateringInvitesBtn = document.getElementById('send-all-catering-invites-btn');
+  const exportCateringCsvBtn = document.getElementById('export-catering-csv-btn');
   let allRegistrations = [];
   let allInvoices = [];
+  let allCateringOrders = [];
   let emailTemplates = [];
   let emailCapabilities = {
     provider: 'disabled',
@@ -83,6 +92,11 @@
 
   function renderStats(stats) {
     const projectedRevenue = Number(stats.projectedRevenueEur || 0);
+    const lunchRegistrantCount = Number(stats.lunchRegistrantCount || 0);
+    const totalLunchSelections = Number(stats.totalLunchSelections || 0);
+    const lunchSummaryCards = stats.lunchDaySummary && typeof stats.lunchDaySummary === 'object'
+      ? Object.entries(stats.lunchDaySummary).map(([day, count]) => renderStatCard(`Lunch ${formatOption('attendanceDay', day)}`, Number(count || 0)))
+      : [];
 
     statsEl.innerHTML = [
       renderStatCard('Active registrations', stats.total),
@@ -92,7 +106,10 @@
       renderStatCard('Anonymized', stats.anonymizedCount || 0),
       renderStatCard('Iaido exam applicants', stats.wantsExamIaido || 0),
       renderStatCard('Jodo exam applicants', stats.wantsExamJodo || 0),
-      renderStatCard('Projected revenue (EUR)', formatCurrency(projectedRevenue, 'EUR'))
+      renderStatCard('Projected revenue (EUR)', formatCurrency(projectedRevenue, 'EUR')),
+      renderStatCard('Lunch registrants', lunchRegistrantCount),
+      renderStatCard('Total lunch day selections', totalLunchSelections),
+      ...lunchSummaryCards
     ].join('');
   }
 
@@ -159,6 +176,13 @@
     return `<span class="helper">${gradeIaido} | ${gradeJodo}<br />${examIaido} | ${examJodo}<br />${attendanceDay}</span>`;
   }
 
+  function formatCateringDays(selection) {
+    const values = selection && typeof selection === 'object'
+      ? Object.entries(selection).filter(([, enabled]) => enabled).map(([day]) => formatOption('attendanceDay', day))
+      : [];
+    return values.length > 0 ? values.join(', ') : '-';
+  }
+
   function renderDetailField(label, value) {
     return `
       <div class="registration-detail-item">
@@ -178,6 +202,9 @@
         ${renderDetailField('Attendance day', formatOption('attendanceDay', item.attendanceDay))}
         ${renderDetailField('Amount', formatCurrency(Number(item.amount ?? item.amountHuf ?? 0), item.currency || 'EUR'))}
         ${renderDetailField('Currency', item.currency || 'EUR')}
+        ${renderDetailField('Lunch days', formatCateringDays(item.cateringSelection))}
+        ${renderDetailField('Lunch day count', String(item.cateringDaysCount || 0))}
+        ${renderDetailField('Lunch amount', formatCurrency(Number(item.cateringAmount || 0), item.currency || 'EUR'))}
 
         ${renderDetailField('Full name', item.fullName)}
         ${renderDetailField('Email', item.email)}
@@ -233,6 +260,8 @@
         const isAnonymized = normalizedStatus === 'ANONYMIZED';
         const isPaid = normalizedStatus === 'PAID';
         const isPendingPayment = normalizedStatus === 'PENDING_PAYMENT';
+        const hasMainLunchSelection = Number(item.cateringDaysCount || 0) > 0;
+        const hasSeparateCateringOrder = Boolean(item.hasCateringOrder);
         const canHardDelete = isDeleted || isAnonymized;
         const amount = Number(item.amount ?? item.amountHuf ?? 0);
         const deleteAction = isDeleted || isAnonymized
@@ -250,8 +279,11 @@
         const retryEmailAction = isDeleted || isAnonymized || isPaid
           ? '<span class="helper">-</span>'
           : `<button class="btn secondary btn-small js-send-retry-email" data-registration-id="${item.id}" type="button">Send payment link email</button>`;
+        const cateringInviteAction = isPaid && !hasMainLunchSelection && !hasSeparateCateringOrder
+          ? `<button class="btn secondary btn-small js-send-catering-invite" data-registration-id="${item.id}" type="button">Send lunch invite</button>`
+          : '<span class="helper">-</span>';
         const detailsToggle = `<button class="btn secondary btn-small js-toggle-details" data-registration-id="${item.id}" aria-expanded="false" type="button">Show details</button>`;
-        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}<div style="height:0.35rem"></div>${hardDeleteAction}`;
+        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${cateringInviteAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}<div style="height:0.35rem"></div>${hardDeleteAction}`;
         const detailRow = `
           <tr class="registration-details-row" data-details-row="${item.id}" hidden>
             <td colspan="7">
@@ -276,14 +308,17 @@
       .join('');
   }
 
-  function updateInvoiceSearchMeta(visibleCount, totalCount, query) {
+  function updateInvoiceSearchMeta(visibleCount, totalCount, query, typeFilter) {
     if (!invoiceSearchMetaEl) return;
-    if (!query) {
+    if (!query && !typeFilter) {
       invoiceSearchMetaEl.textContent = `Showing ${totalCount} invoice records.`;
       return;
     }
 
-    invoiceSearchMetaEl.textContent = `Showing ${visibleCount} of ${totalCount} invoice records for "${query}".`;
+    const parts = [];
+    if (query) parts.push(`query "${query}"`);
+    if (typeFilter) parts.push(`type "${typeFilter}"`);
+    invoiceSearchMetaEl.textContent = `Showing ${visibleCount} of ${totalCount} invoice records for ${parts.join(' and ')}.`;
   }
 
   function renderInvoiceRows(invoices, options = {}) {
@@ -292,8 +327,8 @@
 
     if (!invoices.length) {
       invoiceRowsEl.innerHTML = hasFilter
-        ? '<tr><td colspan="7">No matching invoice records.</td></tr>'
-        : '<tr><td colspan="7">No invoice records yet.</td></tr>';
+        ? '<tr><td colspan="8">No matching invoice records.</td></tr>'
+        : '<tr><td colspan="8">No invoice records yet.</td></tr>';
       return;
     }
 
@@ -302,6 +337,8 @@
       .map((item) => {
         const invoiceId = String(item.id || '');
         const status = String(item.status || '-');
+        const entityType = String(item.entityType || 'registration').trim();
+        const entityLabel = entityType === 'catering_order' ? 'Catering' : 'Registration';
         const registrationId = String(item.registrationId || '');
         const person = String(item.registrationFullName || '').trim();
         const email = String(item.registrationEmail || '').trim();
@@ -311,9 +348,11 @@
 
         const detailRow = `
           <tr class="invoice-details-row" data-invoice-details-row="${invoiceId}" hidden>
-            <td colspan="7">
+            <td colspan="8">
               <div class="registration-details-grid">
                 ${renderDetailField('Record ID', item.id)}
+                ${renderDetailField('Type', entityLabel)}
+                ${renderDetailField('Entity ID', item.entityId || '-')}
                 ${renderDetailField('Registration ID', item.registrationId)}
                 ${renderDetailField('Invoice number', item.invoiceNumber)}
                 ${renderDetailField('Status', status)}
@@ -336,6 +375,7 @@
         return `
           <tr>
             <td>${formatDateTime(item.updatedAt)}</td>
+            <td>${escapeHtml(entityLabel)}</td>
             <td>${escapeHtml(registrationId)}<br />${identity}</td>
             <td>${escapeHtml(item.invoiceNumber || '-')}</td>
             <td>${escapeHtml(status)}</td>
@@ -352,11 +392,13 @@
   function filterInvoices() {
     const query = String(invoiceSearchEl?.value || '').trim();
     const normalized = query.toLowerCase();
+    const typeFilter = String(invoiceTypeFilterEl?.value || '').trim();
 
-    const filtered = !normalized
-      ? allInvoices
-      : allInvoices.filter((item) => {
+    const filtered = allInvoices.filter((item) => {
+        const matchesType = !typeFilter || String(item.entityType || '').trim() === typeFilter;
         const fields = [
+          item.entityType,
+          item.entityId,
           item.registrationId,
           item.registrationFullName,
           item.registrationEmail,
@@ -366,11 +408,12 @@
           item.errorCode,
           item.errorMessage
         ];
-        return fields.some((value) => String(value || '').toLowerCase().includes(normalized));
+        const matchesQuery = !normalized || fields.some((value) => String(value || '').toLowerCase().includes(normalized));
+        return matchesType && matchesQuery;
       });
 
-    renderInvoiceRows(filtered, { hasFilter: normalized.length > 0 });
-    updateInvoiceSearchMeta(filtered.length, allInvoices.length, query);
+    renderInvoiceRows(filtered, { hasFilter: normalized.length > 0 || Boolean(typeFilter) });
+    updateInvoiceSearchMeta(filtered.length, allInvoices.length, query, typeFilter);
   }
 
   function updateSearchMeta(visibleCount, totalCount, query, statusFilter) {
@@ -402,6 +445,70 @@
 
     renderRows(filtered, { hasFilter: normalized.length > 0 || Boolean(statusFilter) });
     updateSearchMeta(filtered.length, allRegistrations.length, query, statusFilter);
+  }
+
+  function updateCateringOrderSearchMeta(visibleCount, totalCount, query, statusFilter) {
+    if (!cateringOrderSearchMetaEl) return;
+    if (!query && !statusFilter) {
+      cateringOrderSearchMetaEl.textContent = `Showing ${totalCount} catering orders.`;
+      return;
+    }
+    const parts = [];
+    if (query) parts.push(`query "${query}"`);
+    if (statusFilter) parts.push(`status "${statusFilter}"`);
+    cateringOrderSearchMetaEl.textContent = `Showing ${visibleCount} of ${totalCount} catering orders for ${parts.join(' and ')}.`;
+  }
+
+  function renderCateringOrderRows(orders, options = {}) {
+    if (!cateringOrderRowsEl) return;
+    const hasFilter = Boolean(options.hasFilter);
+    if (!orders.length) {
+      cateringOrderRowsEl.innerHTML = hasFilter
+        ? '<tr><td colspan="7">No matching catering orders.</td></tr>'
+        : '<tr><td colspan="7">No catering orders yet.</td></tr>';
+      return;
+    }
+
+    cateringOrderRowsEl.innerHTML = orders
+      .slice()
+      .reverse()
+      .map((item) => {
+        const isPendingPayment = String(item.status || '').trim().toUpperCase() === 'PENDING_PAYMENT';
+        const stripeCheckAction = isPendingPayment
+          ? `<button class="btn secondary btn-small js-check-catering-stripe-payment" data-catering-order-id="${item.id}" type="button">Check Stripe payment</button>`
+          : '<span class="helper">-</span>';
+        const retryEmailAction = isPendingPayment
+          ? `<button class="btn secondary btn-small js-send-catering-retry-email" data-catering-order-id="${item.id}" type="button">Send payment link email</button>`
+          : '<span class="helper">-</span>';
+        return `
+          <tr>
+            <td>${formatDateTime(item.createdAt)}</td>
+            <td>${escapeHtml(item.registrationFullName || '-')}<br /><span class="helper">${escapeHtml(item.registrationEmail || '-')}</span></td>
+            <td>${escapeHtml(formatOption('campType', item.campType || ''))}</td>
+            <td><span class="helper">${escapeHtml(formatCateringDays(item.cateringSelection))}</span></td>
+            <td>${formatCurrency(Number(item.amount || 0), item.currency || 'EUR')}</td>
+            <td>${escapeHtml(item.status || '-')}<br /><span class="helper">${escapeHtml(item.invoiceStatus || '-')}</span></td>
+            <td>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}</td>
+          </tr>
+        `;
+      })
+      .join('');
+  }
+
+  function filterCateringOrders() {
+    const query = String(cateringOrderSearchEl?.value || '').trim().toLowerCase();
+    const statusFilter = String(cateringOrderStatusFilterEl?.value || '').trim();
+    const filtered = allCateringOrders.filter((item) => {
+      const fullName = String(item.registrationFullName || '').toLowerCase();
+      const email = String(item.registrationEmail || '').toLowerCase();
+      const status = String(item.status || '').trim();
+      const matchesQuery = !query || fullName.includes(query) || email.includes(query);
+      const matchesStatus = !statusFilter || status === statusFilter;
+      return matchesQuery && matchesStatus;
+    });
+
+    renderCateringOrderRows(filtered, { hasFilter: Boolean(query) || Boolean(statusFilter) });
+    updateCateringOrderSearchMeta(filtered.length, allCateringOrders.length, String(cateringOrderSearchEl?.value || '').trim(), statusFilter);
   }
 
   function showPricingMessage(type, text) {
@@ -450,6 +557,31 @@
 
     sendEmailBtn.disabled = false;
     sendEmailBtn.textContent = 'Send email';
+  }
+
+  function getEligibleCateringInviteRecipients() {
+    return allRegistrations.filter((item) => {
+      const status = String(item.status || '').trim();
+      const email = String(item.email || '').trim();
+      const hasMainLunchSelection = Number(item.cateringDaysCount || 0) > 0;
+      const hasSeparateCateringOrder = Boolean(item.hasCateringOrder);
+      return status === 'PAID' && email.length > 0 && !hasMainLunchSelection && !hasSeparateCateringOrder;
+    });
+  }
+
+  function updateCateringInviteControls() {
+    const eligibleCount = getEligibleCateringInviteRecipients().length;
+    if (cateringInviteMetaEl) {
+      cateringInviteMetaEl.textContent = `Eligible paid registrations for lunch invite: ${eligibleCount}.`;
+    }
+    if (!sendAllCateringInvitesBtn) return;
+    if (isEmailJobRunning()) {
+      sendAllCateringInvitesBtn.disabled = true;
+      sendAllCateringInvitesBtn.textContent = 'Email job running...';
+      return;
+    }
+    sendAllCateringInvitesBtn.disabled = eligibleCount === 0;
+    sendAllCateringInvitesBtn.textContent = 'Send lunch invites to all eligible paid registrations';
   }
 
   function stopEmailJobPolling() {
@@ -519,6 +651,7 @@
 
     renderEmailJobStatus(currentEmailJob, deliveries);
     updateSendEmailButtonState();
+    updateCateringInviteControls();
 
     if (isEmailJobRunning(currentEmailJob)) {
       if (emailCapabilities.provider !== 'disabled') {
@@ -771,13 +904,14 @@
 
   async function loadData() {
     try {
-      const [statsRes, regsRes, pricingRes, emailTemplateRes, invoicesRes, emailJobRes] = await Promise.all([
+      const [statsRes, regsRes, pricingRes, emailTemplateRes, invoicesRes, emailJobRes, cateringOrdersRes] = await Promise.all([
         fetch('/api/stats'),
         fetch('/api/registrations'),
         fetch('/api/admin/pricing'),
         fetch('/api/admin/email/templates'),
         fetch('/api/admin/invoices?limit=500'),
-        fetch('/api/admin/email/job')
+        fetch('/api/admin/email/job'),
+        fetch('/api/admin/catering-orders')
       ]);
 
       if (
@@ -786,7 +920,8 @@
         pricingRes.status === 401 ||
         emailTemplateRes.status === 401 ||
         invoicesRes.status === 401 ||
-        emailJobRes.status === 401
+        emailJobRes.status === 401 ||
+        cateringOrdersRes.status === 401
       ) {
         window.location.href = '/admin';
         return;
@@ -798,8 +933,9 @@
       const emailTemplateData = await emailTemplateRes.json();
       const invoicesData = await invoicesRes.json();
       const emailJobData = await readJsonResponseOrThrow(emailJobRes);
+      const cateringOrdersData = await cateringOrdersRes.json();
 
-      if (!statsRes.ok || !regsRes.ok || !pricingRes.ok || !emailTemplateRes.ok || !invoicesRes.ok || !emailJobRes.ok) {
+      if (!statsRes.ok || !regsRes.ok || !pricingRes.ok || !emailTemplateRes.ok || !invoicesRes.ok || !emailJobRes.ok || !cateringOrdersRes.ok) {
         throw new Error('API error while loading admin data.');
       }
 
@@ -820,6 +956,9 @@
       setEmailSelectionControlsState();
       allInvoices = Array.isArray(invoicesData.invoices) ? invoicesData.invoices : [];
       filterInvoices();
+      allCateringOrders = Array.isArray(cateringOrdersData.orders) ? cateringOrdersData.orders : [];
+      filterCateringOrders();
+      updateCateringInviteControls();
       applyEmailJobState(emailJobData.job || null, Array.isArray(emailJobData.deliveries) ? emailJobData.deliveries : []);
 
       if (emailCapabilities.provider === 'disabled') {
@@ -831,14 +970,20 @@
       rowsEl.innerHTML = '<tr><td colspan="7">Failed to load data.</td></tr>';
       allRegistrations = [];
       allInvoices = [];
+      allCateringOrders = [];
       updateSearchMeta(0, 0, '', '');
       updateInvoiceSearchMeta(0, 0, '');
+      updateCateringOrderSearchMeta(0, 0, '', '');
+      updateCateringInviteControls();
       showPricingMessage('error', 'Failed to load pricing settings.');
       if (emailRecipientRowsEl) {
         emailRecipientRowsEl.innerHTML = '<tr><td colspan="4">Failed to load recipients.</td></tr>';
       }
       if (invoiceRowsEl) {
-        invoiceRowsEl.innerHTML = '<tr><td colspan="7">Failed to load invoice records.</td></tr>';
+        invoiceRowsEl.innerHTML = '<tr><td colspan="8">Failed to load invoice records.</td></tr>';
+      }
+      if (cateringOrderRowsEl) {
+        cateringOrderRowsEl.innerHTML = '<tr><td colspan="7">Failed to load catering orders.</td></tr>';
       }
       showEmailMessage('error', 'Failed to load email sender data.');
       if (emailJobStatusEl) {
@@ -1061,6 +1206,158 @@
     window.alert(message);
   }
 
+  async function sendCateringInviteEmail(registrationId) {
+    const response = await fetch('/api/admin/registrations/send-catering-invite-email', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ registrationId })
+    });
+    const result = await readJsonResponseOrThrow(response);
+    if (response.status === 401) {
+      window.location.href = '/admin';
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to send lunch invitation email.');
+    }
+    window.alert(result.message || 'Lunch invitation email sent.');
+  }
+
+  async function sendAllCateringInvites() {
+    if (isEmailJobRunning()) {
+      showEmailMessage('error', 'Another email job is already running.');
+      return;
+    }
+    const eligibleCount = getEligibleCateringInviteRecipients().length;
+    if (eligibleCount === 0) {
+      showEmailMessage('error', 'There are no eligible paid registrations for lunch invite emails.');
+      return;
+    }
+
+    const shouldProceed = window.confirm(`Send lunch invite emails to ${eligibleCount} eligible paid registration(s)?`);
+    if (!shouldProceed) return;
+
+    showEmailMessage('ok', 'Starting lunch invitation email job...');
+    updateCateringInviteControls();
+
+    try {
+      const response = await fetch('/api/admin/catering/send-invites-to-paid', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      if (response.status === 401) {
+        window.location.href = '/admin';
+        return;
+      }
+
+      const result = await readJsonResponseOrThrow(response);
+
+      if (response.status === 409) {
+        applyEmailJobState(result.job || null, Array.isArray(result.deliveries) ? result.deliveries : []);
+        throw new Error(result.error || 'Another email job is already running.');
+      }
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to start lunch invitation email job.');
+      }
+
+      applyEmailJobState(result.job || null, Array.isArray(result.deliveries) ? result.deliveries : []);
+      showEmailMessage('ok', result.message || 'Lunch invitation email job started successfully.');
+      await loadData();
+    } catch (error) {
+      showEmailMessage('error', error.message);
+    } finally {
+      updateCateringInviteControls();
+    }
+  }
+
+  async function exportCateringCsv() {
+    if (exportCateringCsvBtn) {
+      exportCateringCsvBtn.disabled = true;
+      exportCateringCsvBtn.textContent = 'Exporting...';
+    }
+    try {
+      const response = await fetch('/api/admin/catering-orders/export.csv');
+      if (response.status === 401) {
+        window.location.href = '/admin';
+        return;
+      }
+      if (!response.ok) {
+        throw new Error('Catering CSV export failed.');
+      }
+      const blob = await response.blob();
+      const contentDisposition = response.headers.get('Content-Disposition') || '';
+      const match = contentDisposition.match(/filename=\"?([^\";]+)\"?/i);
+      const fileName = match && match[1] ? match[1] : 'all-catering.csv';
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      window.alert(error.message);
+    } finally {
+      if (exportCateringCsvBtn) {
+        exportCateringCsvBtn.disabled = false;
+        exportCateringCsvBtn.textContent = 'Export Catering CSV';
+      }
+    }
+  }
+
+  async function sendCateringRetryPaymentEmail(cateringOrderId) {
+    const response = await fetch('/api/admin/catering-orders/send-retry-payment-email', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ cateringOrderId })
+    });
+    const result = await readJsonResponseOrThrow(response);
+    if (response.status === 401) {
+      window.location.href = '/admin';
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to generate lunch retry payment link.');
+    }
+    window.alert(result.message || 'Lunch payment link email sent.');
+  }
+
+  async function checkCateringStripePayment(cateringOrderId) {
+    const response = await fetch('/api/admin/catering-orders/check-stripe-payment', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ cateringOrderId })
+    });
+    const result = await readJsonResponseOrThrow(response);
+    if (response.status === 401) {
+      window.location.href = '/admin';
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(result.error || 'Stripe lunch payment check failed.');
+    }
+    const lines = [
+      result.message || 'Stripe payment check completed.',
+      `Lunch order ID: ${result.cateringOrderId || cateringOrderId}`,
+      `Order status: ${result.cateringOrderStatus || '-'}`,
+      `Stripe payment status: ${result?.stripe?.paymentStatus || '-'}`,
+      `Stripe checkout status: ${result?.stripe?.checkoutStatus || '-'}`,
+      `Stripe session: ${result?.stripe?.sessionId || '-'}`
+    ];
+    window.alert(lines.join('\n'));
+    await loadData();
+  }
+
   async function checkStripePayment(registrationId) {
     const response = await fetch('/api/admin/registrations/check-stripe-payment', {
       method: 'POST',
@@ -1274,8 +1571,32 @@
     registrationStatusFilterEl.addEventListener('change', filterRegistrations);
   }
 
+  if (cateringOrderSearchEl) {
+    cateringOrderSearchEl.addEventListener('input', filterCateringOrders);
+  }
+
+  if (cateringOrderStatusFilterEl) {
+    cateringOrderStatusFilterEl.addEventListener('change', filterCateringOrders);
+  }
+
   if (invoiceSearchEl) {
     invoiceSearchEl.addEventListener('input', filterInvoices);
+  }
+  if (invoiceTypeFilterEl) {
+    invoiceTypeFilterEl.addEventListener('change', filterInvoices);
+  }
+
+  if (exportCateringCsvBtn) {
+    exportCateringCsvBtn.addEventListener('click', exportCateringCsv);
+  }
+
+  if (sendAllCateringInvitesBtn) {
+    sendAllCateringInvitesBtn.addEventListener('click', () => {
+      sendAllCateringInvites().catch((error) => {
+        showEmailMessage('error', error.message);
+        updateCateringInviteControls();
+      });
+    });
   }
 
   if (emailRecipientModeEl) {
@@ -1358,6 +1679,18 @@
       return;
     }
 
+    const cateringInviteButton = event.target.closest('.js-send-catering-invite');
+    if (cateringInviteButton) {
+      const registrationId = cateringInviteButton.getAttribute('data-registration-id');
+      if (!registrationId) return;
+      sendCateringInviteEmail(registrationId)
+        .then(() => loadData())
+        .catch((error) => {
+          window.alert(error.message);
+        });
+      return;
+    }
+
     const checkStripeButton = event.target.closest('.js-check-stripe-payment');
     if (checkStripeButton) {
       const registrationId = checkStripeButton.getAttribute('data-registration-id');
@@ -1399,6 +1732,29 @@
       detailsRow.hidden = isOpen;
       toggleButton.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
       toggleButton.textContent = isOpen ? 'Show response' : 'Hide response';
+    });
+  }
+
+  if (cateringOrderRowsEl) {
+    cateringOrderRowsEl.addEventListener('click', (event) => {
+      const retryButton = event.target.closest('.js-send-catering-retry-email');
+      if (retryButton) {
+        const cateringOrderId = retryButton.getAttribute('data-catering-order-id');
+        if (!cateringOrderId) return;
+        sendCateringRetryPaymentEmail(cateringOrderId).catch((error) => {
+          window.alert(error.message);
+        });
+        return;
+      }
+
+      const checkButton = event.target.closest('.js-check-catering-stripe-payment');
+      if (checkButton) {
+        const cateringOrderId = checkButton.getAttribute('data-catering-order-id');
+        if (!cateringOrderId) return;
+        checkCateringStripePayment(cateringOrderId).catch((error) => {
+          window.alert(error.message);
+        });
+      }
     });
   }
 

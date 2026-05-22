@@ -4,7 +4,7 @@ const path = require('path');
 const net = require('net');
 const tls = require('tls');
 const os = require('os');
-const { randomUUID, randomBytes, createHmac, timingSafeEqual, scryptSync } = require('crypto');
+const { randomUUID, randomBytes, createHmac, createHash, timingSafeEqual, scryptSync } = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 
 const PORT = process.env.PORT || 3000;
@@ -72,6 +72,7 @@ const RETRY_PAYMENT_LINK_TTL_SECONDS = (() => {
   const raw = Number(process.env.RETRY_PAYMENT_LINK_TTL_SECONDS || 60 * 60 * 24 * 7);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 60 * 60 * 24 * 7;
 })();
+const CATERING_PRICE_PER_DAY = 12;
 const PRIVACY_POLICY_VERSION = '2026-02-26';
 const TERMS_VERSION = '2026-02-26';
 const SQLITE_BUSY_TIMEOUT_MS = 5000;
@@ -155,6 +156,13 @@ const ADMIN_EMAIL_TEMPLATES = [
     ].join('\n')
   }
 ];
+const CATERING_DAY_OPTIONS = Object.freeze({
+  '2026-07-30': 'Day 1 - July 30, 2026',
+  '2026-07-31': 'Day 2 - July 31, 2026',
+  '2026-08-01': 'Day 3 - August 1, 2026',
+  '2026-08-02': 'Day 4 - August 2, 2026',
+  '2026-08-03': 'Day 5 - August 3, 2026'
+});
 const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || '').trim();
 const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || '').trim();
 const STRIPE_API_BASE_URL = 'https://api.stripe.com/v1';
@@ -481,6 +489,16 @@ function buildPublicPricingConfig(pricingSettings, date = new Date()) {
       };
     }
   }
+  config.catering = {
+    lunch: {
+      label: 'Lunch',
+      amount: CATERING_PRICE_PER_DAY,
+      regularAmount: CATERING_PRICE_PER_DAY,
+      earlyBirdAmount: CATERING_PRICE_PER_DAY,
+      pricingTier: 'regular'
+    },
+    days: Object.entries(CATERING_DAY_OPTIONS).map(([code, label]) => ({ code, label }))
+  };
   return config;
 }
 
@@ -718,10 +736,100 @@ function requiresAttendanceDay(campType) {
   return CAMP_TYPES_REQUIRING_ATTENDANCE_DAY.has(String(campType || '').trim());
 }
 
+function normalizeCateringSelection(input) {
+  const selection = {};
+  for (const day of Object.keys(CATERING_DAY_OPTIONS)) {
+    selection[day] = false;
+  }
+
+  if (Array.isArray(input)) {
+    for (const day of input) {
+      const normalizedDay = String(day || '').trim();
+      if (Object.prototype.hasOwnProperty.call(selection, normalizedDay)) {
+        selection[normalizedDay] = true;
+      }
+    }
+  } else if (input && typeof input === 'object') {
+    for (const [day, enabled] of Object.entries(input)) {
+      const normalizedDay = String(day || '').trim();
+      if (Object.prototype.hasOwnProperty.call(selection, normalizedDay)) {
+        selection[normalizedDay] = Boolean(enabled);
+      }
+    }
+  }
+
+  return selection;
+}
+
+function isValidCateringSelectionInput(input) {
+  if (input == null) return true;
+
+  if (Array.isArray(input)) {
+    return input.every((day) => Object.prototype.hasOwnProperty.call(CATERING_DAY_OPTIONS, String(day || '').trim()));
+  }
+
+  if (typeof input === 'object') {
+    return Object.entries(input).every(([day, enabled]) => {
+      const normalizedDay = String(day || '').trim();
+      return Object.prototype.hasOwnProperty.call(CATERING_DAY_OPTIONS, normalizedDay)
+        && (typeof enabled === 'boolean' || enabled === 0 || enabled === 1 || enabled === '0' || enabled === '1');
+    });
+  }
+
+  return false;
+}
+
+function getSelectedCateringDays(selection) {
+  const normalized = normalizeCateringSelection(selection);
+  return Object.keys(CATERING_DAY_OPTIONS).filter((day) => normalized[day]);
+}
+
+function getCateringDaysCount(selection) {
+  return getSelectedCateringDays(selection).length;
+}
+
+function getCateringAmount(selection) {
+  return Math.round(getCateringDaysCount(selection) * CATERING_PRICE_PER_DAY * 100) / 100;
+}
+
+function stringifyCateringSelection(selection) {
+  return JSON.stringify(normalizeCateringSelection(selection));
+}
+
+function parseCateringSelection(value) {
+  if (!value) return normalizeCateringSelection({});
+  try {
+    return normalizeCateringSelection(JSON.parse(String(value)));
+  } catch {
+    return normalizeCateringSelection({});
+  }
+}
+
+function buildCateringLineItem(selection) {
+  const normalized = normalizeCateringSelection(selection);
+  const selectedDays = getSelectedCateringDays(normalized);
+  const amount = getCateringAmount(normalized);
+  if (selectedDays.length === 0 || amount <= 0) {
+    return null;
+  }
+
+  return {
+    key: 'catering',
+    code: 'lunch',
+    label: `Lunch (${selectedDays.length} day${selectedDays.length === 1 ? '' : 's'})`,
+    amount,
+    regularAmount: amount,
+    earlyBirdAmount: amount,
+    pricingTier: 'regular',
+    selectedDays
+  };
+}
+
 function calculatePricing(selection, pricingSettings = DEFAULT_PRICING_SETTINGS) {
   const campType = toEnumValue(selection.campType, pricingSettings.prices.campType, 'full_seminar');
   const mealPlan = toEnumValue(selection.mealPlan, pricingSettings.prices.mealPlan, 'none');
   const accommodation = toEnumValue(selection.accommodation, pricingSettings.prices.accommodation, 'none');
+  const cateringSelection = normalizeCateringSelection(selection.cateringSelection);
   const currency = 'EUR';
   const pricingNow = new Date();
   const pricingMeta = buildPricingMeta(pricingSettings, pricingNow);
@@ -739,10 +847,15 @@ function calculatePricing(selection, pricingSettings = DEFAULT_PRICING_SETTINGS)
     }
   ];
 
+  const cateringLineItem = buildCateringLineItem(cateringSelection);
+  if (cateringLineItem) {
+    lineItems.push(cateringLineItem);
+  }
+
   const totalAmount = lineItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
   return {
-    selection: { campType, mealPlan, accommodation },
+    selection: { campType, mealPlan, accommodation, cateringSelection },
     lineItems: lineItems.map((item) => ({ ...item, amountHuf: item.amount })),
     total: totalAmount,
     totalAmount,
@@ -949,6 +1062,18 @@ function buildStripeSuccessUrl(baseUrl, registrationId) {
   return addQueryParamsToUrl(raw, extra);
 }
 
+function buildStripeSuccessUrlForCatering(baseUrl, cateringOrderId) {
+  const raw = String(baseUrl || '').trim();
+  const extra = [];
+  if (!/(?:\?|&)session_id=/.test(raw)) {
+    extra.push('session_id={CHECKOUT_SESSION_ID}');
+  }
+  if (cateringOrderId && !/(?:\?|&)catering_order_id=/.test(raw)) {
+    extra.push(`catering_order_id=${encodeURIComponent(String(cateringOrderId))}`);
+  }
+  return addQueryParamsToUrl(raw, extra);
+}
+
 function getStripeStringId(value) {
   if (typeof value === 'string') return value.trim();
   if (value && typeof value === 'object' && typeof value.id === 'string') return String(value.id).trim();
@@ -959,6 +1084,10 @@ function extractRegistrationIdFromStripeSession(session) {
   const metadataRegistrationId = String(session?.metadata?.registration_id || '').trim();
   const clientReferenceId = String(session?.client_reference_id || '').trim();
   return metadataRegistrationId || clientReferenceId;
+}
+
+function extractCateringOrderIdFromStripeSession(session) {
+  return String(session?.metadata?.catering_order_id || '').trim();
 }
 
 function extractStripeSessionIdentifiers(session) {
@@ -1776,8 +1905,13 @@ async function runAdminEmailJob(db, job, recipients, subjectTemplate, contentTem
   try {
     for (let index = 0; index < recipients.length; index += 1) {
       const registration = recipients[index];
-      const renderedSubject = applyEmailTemplateVariables(subjectTemplate, registration).trim();
-      const renderedText = applyEmailTemplateVariables(contentTemplate, registration).trim();
+      const isCateringInviteJob = String(job.templateKey || '').trim() === 'catering_invite_bulk';
+      const renderedSubject = isCateringInviteJob
+        ? String(subjectTemplate || '').trim()
+        : applyEmailTemplateVariables(subjectTemplate, registration).trim();
+      const renderedText = isCateringInviteJob
+        ? String(contentTemplate || '').trim()
+        : applyEmailTemplateVariables(contentTemplate, registration).trim();
 
       if (!renderedSubject || !renderedText) {
         const errorMessage = 'Rendered message is empty.';
@@ -1802,13 +1936,23 @@ async function runAdminEmailJob(db, job, recipients, subjectTemplate, contentTem
         persistAdminEmailJobLog(job);
       } else {
         try {
-          await sendSmtpEmail({
-            toEmail: registration.email,
-            toName: registration.fullName,
-            subject: renderedSubject,
-            textContent: renderedText,
-            htmlContent: plainTextToHtml(renderedText)
-          });
+          if (isCateringInviteJob) {
+            const existingOrder = getCateringOrderByRegistrationId(db, registration.id);
+            const hasMainLunchSelection = Number(registration.cateringDaysCount || 0) > 0;
+            if (registration.status !== 'PAID' || existingOrder || hasMainLunchSelection) {
+              throw new Error('Registration is no longer eligible for lunch invite.');
+            }
+            const tokenPayload = await runWithSqliteRetry(() => createCateringAccessToken(db, registration.id, 'admin_bulk'));
+            await sendCateringInvitationEmail(registration, tokenPayload.url);
+          } else {
+            await sendSmtpEmail({
+              toEmail: registration.email,
+              toName: registration.fullName,
+              subject: renderedSubject,
+              textContent: renderedText,
+              htmlContent: plainTextToHtml(renderedText)
+            });
+          }
           const delivery = {
             id: `mail_delivery_${randomUUID()}`,
             jobId: job.id,
@@ -1928,6 +2072,20 @@ function startAdminEmailJob(db, payload) {
   return job;
 }
 
+function selectEligibleCateringInviteRecipients(registrations) {
+  return registrations.filter((item) => {
+    return isRegistrationEligibleForCateringInvite(item);
+  });
+}
+
+function isRegistrationEligibleForCateringInvite(registration) {
+  const status = String(registration?.status || '').trim();
+  const email = String(registration?.email || '').trim();
+  const hasMainLunchSelection = Number(registration?.cateringDaysCount || 0) > 0;
+  const hasSeparateCateringOrder = Boolean(registration?.hasCateringOrder);
+  return status === 'PAID' && email.length > 0 && !hasMainLunchSelection && !hasSeparateCateringOrder;
+}
+
 function isSzamlazzEnabled() {
   return SZAMLAZZ_ENABLED && SZAMLAZZ_AGENT_KEY.length > 0;
 }
@@ -1964,6 +2122,11 @@ function buildSzamlazzExternalId(registrationId) {
   return `${SZAMLAZZ_EXTERNAL_ID_PREFIX}${safeId}`;
 }
 
+function buildSzamlazzCateringExternalId(cateringOrderId) {
+  const safeId = String(cateringOrderId || '').trim();
+  return `${SZAMLAZZ_EXTERNAL_ID_PREFIX}catering-${safeId}`;
+}
+
 function calculateVatBreakdown(grossAmount, vatKey) {
   const gross = roundMoney(grossAmount);
   const rate = Number(String(vatKey || '').replace(',', '.'));
@@ -1980,10 +2143,12 @@ function getRegistrationPackageLabel(registration) {
   const key = String(registration?.campType || '').trim();
   const base = PRICE_CATALOG.campType?.[key]?.label || 'Seminar package';
   const attendanceDay = String(registration?.attendanceDay || '').trim();
-  if (!attendanceDay) {
-    return base;
+  const packageLabel = attendanceDay ? `${base} - ${getAttendanceDayLabel(attendanceDay)}` : base;
+  const lunchDays = Number(registration?.cateringDaysCount || 0);
+  if (lunchDays > 0) {
+    return `${packageLabel} + Lunch`;
   }
-  return `${base} - ${getAttendanceDayLabel(attendanceDay)}`;
+  return packageLabel;
 }
 
 function buildSzamlazzInvoiceXml(registration, options = {}) {
@@ -2017,6 +2182,64 @@ function buildSzamlazzInvoiceXml(registration, options = {}) {
     <szamlaNyelve>${escapeXml(SZAMLAZZ_INVOICE_LANGUAGE)}</szamlaNyelve>
     <megjegyzes>${escapeXml(SZAMLAZZ_COMMENT)}</megjegyzes>
     <rendelesSzam>${escapeXml(registration.id)}</rendelesSzam>
+    <fizetve>${toBooleanXml(SZAMLAZZ_SET_PAID)}</fizetve>
+  </fejlec>
+  <elado />
+  <vevo>
+    <nev>${escapeXml(registration.billingFullName || registration.fullName || '')}</nev>
+    <irsz>${escapeXml(registration.billingZip || '')}</irsz>
+    <telepules>${escapeXml(registration.billingCity || '')}</telepules>
+    <cim>${escapeXml(registration.billingAddress || '')}</cim>
+    <orszag>${escapeXml(registration.billingCountry || '')}</orszag>
+    <email>${escapeXml(registration.email || '')}</email>
+    <sendEmail>${toBooleanXml(SZAMLAZZ_SEND_EMAIL)}</sendEmail>
+  </vevo>
+  <tetelek>
+    <tetel>
+      <megnevezes>${escapeXml(description)}</megnevezes>
+      <mennyiseg>1</mennyiseg>
+      <mennyisegiEgyseg>db</mennyisegiEgyseg>
+      <nettoEgysegar>${formatMoneyXml(breakdown.net)}</nettoEgysegar>
+      <afakulcs>${escapeXml(vatKey)}</afakulcs>
+      <nettoErtek>${formatMoneyXml(breakdown.net)}</nettoErtek>
+      <afaErtek>${formatMoneyXml(breakdown.vat)}</afaErtek>
+      <bruttoErtek>${formatMoneyXml(breakdown.gross)}</bruttoErtek>
+    </tetel>
+  </tetelek>
+</xmlszamla>`;
+} 
+
+function buildSzamlazzInvoiceXmlForCateringOrder(registration, cateringOrder, options = {}) {
+  const externalId = String(options.externalId || buildSzamlazzCateringExternalId(cateringOrder.id)).trim();
+  const invoiceDate = String(options.invoiceDate || getTodayDateString()).trim() || getTodayDateString();
+  const dueDate = String(options.dueDate || invoiceDate).trim() || invoiceDate;
+  const amount = Number(cateringOrder.amount || 0);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw createError(400, 'Invalid catering amount for invoice creation.');
+  }
+
+  const vatKey = String(options.vatKey || SZAMLAZZ_AFAKULCS).trim() || 'TAM';
+  const breakdown = calculateVatBreakdown(amount, vatKey);
+  const description = String(options.description || 'Lunch').trim() || 'Lunch';
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<xmlszamla xmlns="http://www.szamlazz.hu/xmlszamla" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.szamlazz.hu/xmlszamla https://www.szamlazz.hu/szamla/docs/xsds/agent/xmlszamla.xsd">
+  <beallitasok>
+    <szamlaagentkulcs>${escapeXml(SZAMLAZZ_AGENT_KEY)}</szamlaagentkulcs>
+    <eszamla>${toBooleanXml(SZAMLAZZ_ESZAMLA)}</eszamla>
+    <szamlaLetoltes>false</szamlaLetoltes>
+    <valaszVerzio>2</valaszVerzio>
+    <szamlaKulsoAzon>${escapeXml(externalId)}</szamlaKulsoAzon>
+  </beallitasok>
+  <fejlec>
+    <keltDatum>${escapeXml(invoiceDate)}</keltDatum>
+    <teljesitesDatum>${escapeXml(invoiceDate)}</teljesitesDatum>
+    <fizetesiHataridoDatum>${escapeXml(dueDate)}</fizetesiHataridoDatum>
+    <fizmod>${escapeXml(SZAMLAZZ_PAYMENT_METHOD)}</fizmod>
+    <penznem>${escapeXml(String(cateringOrder.currency || 'EUR').toUpperCase())}</penznem>
+    <szamlaNyelve>${escapeXml(SZAMLAZZ_INVOICE_LANGUAGE)}</szamlaNyelve>
+    <megjegyzes>${escapeXml(SZAMLAZZ_COMMENT)}</megjegyzes>
+    <rendelesSzam>${escapeXml(cateringOrder.id)}</rendelesSzam>
     <fizetve>${toBooleanXml(SZAMLAZZ_SET_PAID)}</fizetve>
   </fejlec>
   <elado />
@@ -2156,11 +2379,90 @@ function getInvoiceRecordByRegistrationId(db, registrationId) {
   };
 }
 
+function upsertCateringInvoiceRecord(db, payload) {
+  const upsert = db.prepare(`
+    INSERT INTO catering_invoice_records (
+      id,
+      catering_order_id,
+      provider,
+      status,
+      trigger_source,
+      invoice_number,
+      external_id,
+      net_amount,
+      gross_amount,
+      currency,
+      request_xml,
+      raw_response,
+      error_code,
+      error_message,
+      created_at,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(catering_order_id) DO UPDATE SET
+      status = excluded.status,
+      trigger_source = excluded.trigger_source,
+      invoice_number = excluded.invoice_number,
+      external_id = excluded.external_id,
+      net_amount = excluded.net_amount,
+      gross_amount = excluded.gross_amount,
+      currency = excluded.currency,
+      request_xml = excluded.request_xml,
+      raw_response = excluded.raw_response,
+      error_code = excluded.error_code,
+      error_message = excluded.error_message,
+      updated_at = excluded.updated_at
+  `);
+
+  const now = new Date().toISOString();
+  upsert.run(
+    `cat_inv_${randomUUID()}`,
+    String(payload.cateringOrderId || '').trim(),
+    'szamlazz_hu',
+    String(payload.status || 'FAILED'),
+    String(payload.triggerSource || 'manual'),
+    String(payload.invoiceNumber || ''),
+    String(payload.externalId || ''),
+    roundMoney(payload.netAmount),
+    roundMoney(payload.grossAmount),
+    String(payload.currency || 'EUR'),
+    String(payload.requestXml || ''),
+    String(payload.rawResponse || ''),
+    String(payload.errorCode || ''),
+    String(payload.errorMessage || ''),
+    now,
+    now
+  );
+}
+
+function getCateringInvoiceRecordByOrderId(db, cateringOrderId) {
+  const row = db.prepare('SELECT * FROM catering_invoice_records WHERE catering_order_id = ?').get(String(cateringOrderId || '').trim());
+  if (!row) return null;
+  return {
+    id: row.id,
+    cateringOrderId: row.catering_order_id,
+    provider: row.provider,
+    status: row.status,
+    triggerSource: row.trigger_source,
+    invoiceNumber: row.invoice_number || '',
+    externalId: row.external_id || '',
+    netAmount: Number(row.net_amount || 0),
+    grossAmount: Number(row.gross_amount || 0),
+    currency: row.currency || 'EUR',
+    requestXml: row.request_xml || '',
+    rawResponse: row.raw_response || '',
+    errorCode: row.error_code || '',
+    errorMessage: row.error_message || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
 function readInvoiceRecords(db, options = {}) {
   const rawLimit = Number(options.limit || 200);
   const limit = Number.isFinite(rawLimit) && rawLimit >= 1 ? Math.min(Math.floor(rawLimit), 1000) : 200;
 
-  const rows = db
+  const registrationRows = db
     .prepare(`
       SELECT
         i.*,
@@ -2173,8 +2475,25 @@ function readInvoiceRecords(db, options = {}) {
     `)
     .all(limit);
 
-  return rows.map((row) => ({
+  const cateringRows = db
+    .prepare(`
+      SELECT
+        i.*,
+        c.registration_id,
+        r.full_name AS registration_full_name,
+        r.email AS registration_email
+      FROM catering_invoice_records i
+      LEFT JOIN catering_orders c ON c.id = i.catering_order_id
+      LEFT JOIN registrations r ON r.id = c.registration_id
+      ORDER BY datetime(i.updated_at) DESC, i.rowid DESC
+      LIMIT ?
+    `)
+    .all(limit);
+
+  const mappedRegistrationRows = registrationRows.map((row) => ({
     id: row.id,
+    entityType: 'registration',
+    entityId: row.registration_id,
     registrationId: row.registration_id,
     registrationFullName: row.registration_full_name || '',
     registrationEmail: row.registration_email || '',
@@ -2193,6 +2512,38 @@ function readInvoiceRecords(db, options = {}) {
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }));
+
+  const mappedCateringRows = cateringRows.map((row) => ({
+    id: row.id,
+    entityType: 'catering_order',
+    entityId: row.catering_order_id,
+    registrationId: row.registration_id || '',
+    registrationFullName: row.registration_full_name || '',
+    registrationEmail: row.registration_email || '',
+    provider: row.provider,
+    status: row.status,
+    triggerSource: row.trigger_source,
+    invoiceNumber: row.invoice_number || '',
+    externalId: row.external_id || '',
+    netAmount: Number(row.net_amount || 0),
+    grossAmount: Number(row.gross_amount || 0),
+    currency: row.currency || 'EUR',
+    requestXml: row.request_xml || '',
+    rawResponse: row.raw_response || '',
+    errorCode: row.error_code || '',
+    errorMessage: row.error_message || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }));
+
+  return mappedRegistrationRows
+    .concat(mappedCateringRows)
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.updatedAt || left.createdAt || '') || 0;
+      const rightTime = Date.parse(right.updatedAt || right.createdAt || '') || 0;
+      return rightTime - leftTime;
+    })
+    .slice(0, limit);
 }
 
 async function sendSzamlazzInvoice(xml) {
@@ -2346,6 +2697,113 @@ async function createInvoiceForRegistration(db, registrationId, options = {}) {
       throw error;
     }
 
+    throw createError(502, `Szamlazz.hu invoice request failed: ${error.message || 'Unknown error'}`);
+  }
+}
+
+async function createInvoiceForCateringOrder(db, cateringOrderId, options = {}) {
+  if (!isSzamlazzEnabled()) {
+    throw createError(503, 'Szamlazz.hu integration is not configured.');
+  }
+
+  const cateringOrder = getCateringOrderById(db, cateringOrderId);
+  if (!cateringOrder) {
+    throw createError(404, 'Catering order not found.');
+  }
+  if (cateringOrder.status !== 'PAID') {
+    throw createError(400, `Invoice can only be created for PAID catering orders. Current status: ${cateringOrder.status}.`);
+  }
+
+  const registration = getRegistrationById(db, cateringOrder.registrationId);
+  if (!registration) {
+    throw createError(404, 'Registration not found for catering order.');
+  }
+
+  const existing = getCateringInvoiceRecordByOrderId(db, cateringOrder.id);
+  if (existing && existing.status === 'SUCCESS' && existing.invoiceNumber) {
+    return { created: false, reused: true, invoice: existing };
+  }
+
+  const triggerSource = String(options.triggerSource || 'manual');
+  const externalId = String(existing?.externalId || buildSzamlazzCateringExternalId(cateringOrder.id)).trim();
+  const invoiceVatKey = String(options.vatKey || SZAMLAZZ_AFAKULCS).trim() || 'TAM';
+  const invoiceXml = buildSzamlazzInvoiceXmlForCateringOrder(registration, cateringOrder, {
+    externalId,
+    invoiceDate: options.invoiceDate,
+    dueDate: options.dueDate,
+    vatKey: invoiceVatKey,
+    description: options.description || 'Lunch'
+  });
+
+  try {
+    const rawResponse = await sendSzamlazzInvoice(invoiceXml);
+    const parsed = parseSzamlazzResponse(rawResponse);
+    if (!parsed.success || !parsed.invoiceNumber) {
+      await runWithSqliteRetry(() => upsertCateringInvoiceRecord(db, {
+        cateringOrderId: cateringOrder.id,
+        status: 'FAILED',
+        triggerSource,
+        invoiceNumber: parsed.invoiceNumber,
+        externalId,
+        netAmount: cateringOrder.amount,
+        grossAmount: cateringOrder.amount,
+        currency: cateringOrder.currency || 'EUR',
+        requestXml: invoiceXml,
+        rawResponse,
+        errorCode: parsed.errorCode || 'missing_invoice_number',
+        errorMessage: parsed.errorMessage || 'Missing invoice number in Szamlazz.hu response.'
+      }));
+      const error = createError(502, 'Szamlazz.hu did not return an invoice number.');
+      error.alreadyStored = true;
+      throw error;
+    }
+
+    const breakdown = calculateVatBreakdown(Number(cateringOrder.amount || 0), invoiceVatKey);
+    await runWithSqliteRetry(() => upsertCateringInvoiceRecord(db, {
+      cateringOrderId: cateringOrder.id,
+      status: 'SUCCESS',
+      triggerSource,
+      invoiceNumber: parsed.invoiceNumber,
+      externalId,
+      netAmount: breakdown.net,
+      grossAmount: breakdown.gross,
+      currency: cateringOrder.currency || 'EUR',
+      requestXml: invoiceXml,
+      rawResponse,
+      errorCode: '',
+      errorMessage: ''
+    }));
+
+    return {
+      created: true,
+      reused: false,
+      invoice: getCateringInvoiceRecordByOrderId(db, cateringOrder.id)
+    };
+  } catch (error) {
+    if (!error?.alreadyStored) {
+      try {
+        await runWithSqliteRetry(() => upsertCateringInvoiceRecord(db, {
+          cateringOrderId: cateringOrder.id,
+          status: 'FAILED',
+          triggerSource,
+          invoiceNumber: '',
+          externalId,
+          netAmount: cateringOrder.amount,
+          grossAmount: cateringOrder.amount,
+          currency: cateringOrder.currency || 'EUR',
+          requestXml: invoiceXml,
+          rawResponse: '',
+          errorCode: '',
+          errorMessage: error.message || 'Unknown invoice error'
+        }));
+      } catch (storeError) {
+        console.error(`Catering invoice failure log write failed for ${cateringOrder.id}: ${storeError.message}`);
+      }
+    }
+
+    if (Number(error.statusCode)) {
+      throw error;
+    }
     throw createError(502, `Szamlazz.hu invoice request failed: ${error.message || 'Unknown error'}`);
   }
 }
@@ -2631,6 +3089,10 @@ function initDatabase() {
       billing_address TEXT NOT NULL,
       billing_country TEXT NOT NULL,
       food_notes TEXT,
+      catering_selection_json TEXT NOT NULL DEFAULT '{}',
+      catering_days_count INTEGER NOT NULL DEFAULT 0,
+      catering_amount REAL NOT NULL DEFAULT 0,
+      catering_locked_at TEXT NOT NULL DEFAULT '',
       price_breakdown TEXT NOT NULL,
       stripe_checkout_session_id TEXT NOT NULL DEFAULT '',
       stripe_payment_intent_id TEXT NOT NULL DEFAULT '',
@@ -2654,6 +3116,64 @@ function initDatabase() {
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS catering_orders (
+      id TEXT PRIMARY KEY,
+      registration_id TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      status TEXT NOT NULL,
+      catering_selection_json TEXT NOT NULL DEFAULT '{}',
+      catering_days_count INTEGER NOT NULL DEFAULT 0,
+      amount REAL NOT NULL,
+      currency TEXT NOT NULL,
+      price_per_day REAL NOT NULL,
+      stripe_checkout_session_id TEXT NOT NULL DEFAULT '',
+      stripe_payment_intent_id TEXT NOT NULL DEFAULT '',
+      stripe_customer_id TEXT NOT NULL DEFAULT '',
+      stripe_last_event_type TEXT NOT NULL DEFAULT '',
+      stripe_last_event_at TEXT NOT NULL DEFAULT '',
+      paid_at TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT '',
+      notes TEXT NOT NULL DEFAULT ''
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_catering_orders_status ON catering_orders(status);
+    CREATE INDEX IF NOT EXISTS idx_catering_orders_created_at ON catering_orders(created_at);
+
+    CREATE TABLE IF NOT EXISTS catering_access_tokens (
+      id TEXT PRIMARY KEY,
+      registration_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      used_at TEXT NOT NULL DEFAULT '',
+      revoked_at TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT ''
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_catering_access_tokens_registration ON catering_access_tokens(registration_id);
+
+    CREATE TABLE IF NOT EXISTS catering_invoice_records (
+      id TEXT PRIMARY KEY,
+      catering_order_id TEXT NOT NULL UNIQUE,
+      provider TEXT NOT NULL,
+      status TEXT NOT NULL,
+      trigger_source TEXT NOT NULL,
+      invoice_number TEXT,
+      external_id TEXT,
+      net_amount REAL,
+      gross_amount REAL,
+      currency TEXT NOT NULL,
+      request_xml TEXT NOT NULL DEFAULT '',
+      raw_response TEXT NOT NULL,
+      error_code TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_catering_invoice_records_status ON catering_invoice_records(status);
+    CREATE INDEX IF NOT EXISTS idx_catering_invoice_records_order ON catering_invoice_records(catering_order_id);
 
     CREATE TABLE IF NOT EXISTS invoice_records (
       id TEXT PRIMARY KEY,
@@ -2716,6 +3236,18 @@ function ensureRegistrationColumns(db) {
   }
   if (!columnNames.has('price_breakdown')) {
     db.exec("ALTER TABLE registrations ADD COLUMN price_breakdown TEXT NOT NULL DEFAULT '{}';");
+  }
+  if (!columnNames.has('catering_selection_json')) {
+    db.exec("ALTER TABLE registrations ADD COLUMN catering_selection_json TEXT NOT NULL DEFAULT '{}';");
+  }
+  if (!columnNames.has('catering_days_count')) {
+    db.exec("ALTER TABLE registrations ADD COLUMN catering_days_count INTEGER NOT NULL DEFAULT 0;");
+  }
+  if (!columnNames.has('catering_amount')) {
+    db.exec("ALTER TABLE registrations ADD COLUMN catering_amount REAL NOT NULL DEFAULT 0;");
+  }
+  if (!columnNames.has('catering_locked_at')) {
+    db.exec("ALTER TABLE registrations ADD COLUMN catering_locked_at TEXT NOT NULL DEFAULT '';");
   }
   if (!columnNames.has('current_grade_iaido')) {
     db.exec("ALTER TABLE registrations ADD COLUMN current_grade_iaido TEXT NOT NULL DEFAULT '';");
@@ -2786,6 +3318,20 @@ function ensureRegistrationColumns(db) {
       END
     WHERE COALESCE(current_grade_iaido, '') = ''
   `);
+
+  db.exec(`
+    UPDATE registrations
+    SET
+      catering_selection_json = COALESCE(NULLIF(catering_selection_json, ''), '{}'),
+      catering_days_count = CASE
+        WHEN COALESCE(catering_selection_json, '') = '' OR catering_selection_json = '{}' THEN 0
+        ELSE catering_days_count
+      END,
+      catering_amount = CASE
+        WHEN COALESCE(catering_selection_json, '') = '' OR catering_selection_json = '{}' THEN 0
+        ELSE catering_amount
+      END
+  `);
 }
 
 function ensureInvoiceRecordColumns(db) {
@@ -2827,9 +3373,10 @@ function migrateLegacyJsonIfNeeded(db) {
       camp_type, attendance_day, meal_plan, accommodation,
       wants_exam, target_grade, wants_exam_iaido, target_grade_iaido, wants_exam_jodo, target_grade_jodo,
       billing_full_name, billing_zip, billing_city, billing_address, billing_country,
-      food_notes, price_breakdown, privacy_consent, terms_consent,
+      food_notes, catering_selection_json, catering_days_count, catering_amount, catering_locked_at,
+      price_breakdown, privacy_consent, terms_consent,
       privacy_policy_version, terms_version, privacy_consent_at, terms_consent_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   db.exec('BEGIN');
@@ -2880,6 +3427,10 @@ function migrateLegacyJsonIfNeeded(db) {
         String(item.billingAddress || ''),
         String(item.billingCountry || 'Hungary'),
         String(item.foodNotes || ''),
+        stringifyCateringSelection({}),
+        0,
+        0,
+        '',
         JSON.stringify(pricing),
         item.privacyConsent ? 1 : 0,
         item.termsConsent ? 1 : 0,
@@ -2942,6 +3493,10 @@ function mapRegistrationRow(row) {
     billingAddress: row.billing_address,
     billingCountry: row.billing_country,
     foodNotes: row.food_notes || '',
+    cateringSelection: parseCateringSelection(row.catering_selection_json),
+    cateringDaysCount: Number(row.catering_days_count || 0),
+    cateringAmount: Number(row.catering_amount || 0),
+    cateringLockedAt: row.catering_locked_at || '',
     priceBreakdown,
     stripeCheckoutSessionId: row.stripe_checkout_session_id || '',
     stripePaymentIntentId: row.stripe_payment_intent_id || '',
@@ -2978,6 +3533,306 @@ function getRegistrationByStripeCheckoutSessionId(db, sessionId) {
     .get(String(sessionId || '').trim());
   if (!row) return null;
   return mapRegistrationRow(row);
+}
+
+function mapCateringOrderRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    registrationId: row.registration_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    status: row.status,
+    cateringSelection: parseCateringSelection(row.catering_selection_json),
+    cateringDaysCount: Number(row.catering_days_count || 0),
+    amount: Number(row.amount || 0),
+    currency: row.currency || 'EUR',
+    pricePerDay: Number(row.price_per_day || CATERING_PRICE_PER_DAY),
+    stripeCheckoutSessionId: row.stripe_checkout_session_id || '',
+    stripePaymentIntentId: row.stripe_payment_intent_id || '',
+    stripeCustomerId: row.stripe_customer_id || '',
+    stripeLastEventType: row.stripe_last_event_type || '',
+    stripeLastEventAt: row.stripe_last_event_at || '',
+    paidAt: row.paid_at || '',
+    source: row.source || '',
+    notes: row.notes || ''
+  };
+}
+
+function getCateringOrderById(db, cateringOrderId) {
+  const row = db.prepare('SELECT * FROM catering_orders WHERE id = ?').get(String(cateringOrderId || '').trim());
+  return mapCateringOrderRow(row);
+}
+
+function getCateringOrderByRegistrationId(db, registrationId) {
+  const row = db.prepare('SELECT * FROM catering_orders WHERE registration_id = ?').get(String(registrationId || '').trim());
+  return mapCateringOrderRow(row);
+}
+
+function getCateringOrderByStripeCheckoutSessionId(db, sessionId) {
+  const row = db.prepare('SELECT * FROM catering_orders WHERE stripe_checkout_session_id = ?').get(String(sessionId || '').trim());
+  return mapCateringOrderRow(row);
+}
+
+function insertCateringOrder(db, order) {
+  const insert = db.prepare(`
+    INSERT INTO catering_orders (
+      id, registration_id, created_at, updated_at, status,
+      catering_selection_json, catering_days_count, amount, currency, price_per_day,
+      stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_last_event_type, stripe_last_event_at, paid_at,
+      source, notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  insert.run(
+    order.id,
+    order.registrationId,
+    order.createdAt,
+    order.updatedAt,
+    order.status,
+    stringifyCateringSelection(order.cateringSelection),
+    Number(order.cateringDaysCount || 0),
+    Number(order.amount || 0),
+    String(order.currency || 'EUR'),
+    Number(order.pricePerDay || CATERING_PRICE_PER_DAY),
+    String(order.stripeCheckoutSessionId || ''),
+    String(order.stripePaymentIntentId || ''),
+    String(order.stripeCustomerId || ''),
+    String(order.stripeLastEventType || ''),
+    String(order.stripeLastEventAt || ''),
+    String(order.paidAt || ''),
+    String(order.source || ''),
+    String(order.notes || '')
+  );
+}
+
+function updateCateringOrderStripeTracking(db, cateringOrderId, tracking = {}) {
+  const current = getCateringOrderById(db, cateringOrderId);
+  if (!current) return 0;
+
+  const update = db.prepare(`
+    UPDATE catering_orders
+    SET
+      updated_at = ?,
+      stripe_checkout_session_id = ?,
+      stripe_payment_intent_id = ?,
+      stripe_customer_id = ?,
+      stripe_last_event_type = ?,
+      stripe_last_event_at = ?,
+      paid_at = ?
+    WHERE id = ?
+  `);
+
+  const result = update.run(
+    new Date().toISOString(),
+    String(tracking.checkoutSessionId || current.stripeCheckoutSessionId || '').trim(),
+    String(tracking.paymentIntentId || current.stripePaymentIntentId || '').trim(),
+    String(tracking.customerId || current.stripeCustomerId || '').trim(),
+    String(tracking.lastEventType || current.stripeLastEventType || '').trim(),
+    String(tracking.lastEventAt || current.stripeLastEventAt || '').trim(),
+    String(tracking.paidAt || current.paidAt || '').trim(),
+    String(cateringOrderId || '').trim()
+  );
+
+  return Number(result.changes || 0);
+}
+
+function updateCateringOrderStatus(db, cateringOrderId, status, options = {}) {
+  const normalizedStatus = String(status || '').trim();
+  const safeId = String(cateringOrderId || '').trim();
+  const current = getCateringOrderById(db, safeId);
+  if (!current) return 0;
+  if (current.status === normalizedStatus) return 0;
+
+  const update = db.prepare(`
+    UPDATE catering_orders
+    SET
+      status = ?,
+      updated_at = ?,
+      paid_at = CASE
+        WHEN ? = 'PAID' AND COALESCE(paid_at, '') = '' THEN ?
+        ELSE paid_at
+      END
+    WHERE id = ?
+  `);
+  const paidAt = String(options.paidAt || new Date().toISOString()).trim();
+  const result = update.run(normalizedStatus, new Date().toISOString(), normalizedStatus, paidAt, safeId);
+  return Number(result.changes || 0);
+}
+
+function readCateringOrders(db) {
+  const rows = db.prepare('SELECT * FROM catering_orders ORDER BY datetime(created_at) ASC, rowid ASC').all();
+  return rows.map(mapCateringOrderRow);
+}
+
+function mapCateringAccessTokenRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    registrationId: row.registration_id,
+    tokenHash: row.token_hash,
+    createdAt: row.created_at,
+    usedAt: row.used_at || '',
+    revokedAt: row.revoked_at || '',
+    createdBy: row.created_by || ''
+  };
+}
+
+function getLatestCateringAccessTokenByRegistrationId(db, registrationId) {
+  const row = db.prepare(`
+    SELECT * FROM catering_access_tokens
+    WHERE registration_id = ?
+    ORDER BY datetime(created_at) DESC, rowid DESC
+    LIMIT 1
+  `).get(String(registrationId || '').trim());
+  return mapCateringAccessTokenRow(row);
+}
+
+function getCateringAccessTokenByPlainToken(db, token) {
+  const tokenHash = hashOpaqueToken(token);
+  const row = db.prepare('SELECT * FROM catering_access_tokens WHERE token_hash = ?').get(tokenHash);
+  return mapCateringAccessTokenRow(row);
+}
+
+function createCateringAccessToken(db, registrationId, createdBy = 'admin') {
+  const registration = getRegistrationById(db, registrationId);
+  if (!registration) {
+    throw createError(404, 'Registration not found.');
+  }
+
+  const existingOrder = getCateringOrderByRegistrationId(db, registrationId);
+  const eligibility = {
+    ...registration,
+    hasCateringOrder: Boolean(existingOrder)
+  };
+  if (!isRegistrationEligibleForCateringInvite(eligibility)) {
+    throw createError(400, 'Lunch invitation is not available for this registration.');
+  }
+
+  const existingToken = getLatestCateringAccessTokenByRegistrationId(db, registrationId);
+  if (existingToken && !existingToken.usedAt && !existingToken.revokedAt) {
+    db.prepare('UPDATE catering_access_tokens SET revoked_at = ? WHERE id = ?')
+      .run(new Date().toISOString(), existingToken.id);
+  }
+
+  const plainToken = generateCateringAccessTokenValue();
+  const record = {
+    id: `cat_token_${randomUUID()}`,
+    registrationId: String(registrationId || '').trim(),
+    tokenHash: hashOpaqueToken(plainToken),
+    createdAt: new Date().toISOString(),
+    usedAt: '',
+    revokedAt: '',
+    createdBy: String(createdBy || 'admin')
+  };
+
+  db.prepare(`
+    INSERT INTO catering_access_tokens (
+      id, registration_id, token_hash, created_at, used_at, revoked_at, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(record.id, record.registrationId, record.tokenHash, record.createdAt, '', '', record.createdBy);
+
+  return {
+    token: plainToken,
+    url: buildCateringAccessUrl(plainToken),
+    record
+  };
+}
+
+function markCateringAccessTokenUsed(db, tokenId) {
+  const result = db.prepare(`
+    UPDATE catering_access_tokens
+    SET used_at = CASE WHEN COALESCE(used_at, '') = '' THEN ? ELSE used_at END
+    WHERE id = ?
+  `).run(new Date().toISOString(), String(tokenId || '').trim());
+  return Number(result.changes || 0);
+}
+
+function getCateringAccessState(db, plainToken) {
+  const token = getCateringAccessTokenByPlainToken(db, plainToken);
+  if (!token || token.revokedAt) {
+    return { state: 'invalid', token: null, registration: null, cateringOrder: null };
+  }
+
+  const registration = getRegistrationById(db, token.registrationId);
+  if (!registration || registration.status === 'DELETED' || registration.status === 'ANONYMIZED') {
+    return { state: 'invalid', token, registration: null, cateringOrder: null };
+  }
+
+  const cateringOrder = getCateringOrderByRegistrationId(db, token.registrationId);
+  if (cateringOrder) {
+    return {
+      state: cateringOrder.status === 'PAID' ? 'settled' : 'registered_unpaid',
+      token,
+      registration,
+      cateringOrder
+    };
+  }
+
+  if (token.usedAt) {
+    return { state: 'invalid', token, registration, cateringOrder: null };
+  }
+
+  return { state: 'ready', token, registration, cateringOrder: null };
+}
+
+function createCateringOrderFromToken(db, plainToken, cateringSelection) {
+  const access = getCateringAccessState(db, plainToken);
+  if (access.state !== 'ready' || !access.token || !access.registration) {
+    throw createError(400, 'This catering registration link is invalid or already used.');
+  }
+
+  const registrationWithOrderFlag = {
+    ...access.registration,
+    hasCateringOrder: Boolean(access.cateringOrder)
+  };
+  if (!isRegistrationEligibleForCateringInvite(registrationWithOrderFlag)) {
+    throw createError(400, 'Lunch registration is not available for this seminar registration.');
+  }
+
+  const normalizedSelection = normalizeCateringSelection(cateringSelection);
+  const selectedDays = getSelectedCateringDays(normalizedSelection);
+  if (selectedDays.length === 0) {
+    throw createError(400, 'Select at least one lunch day.');
+  }
+
+  const now = new Date().toISOString();
+  const order = {
+    id: `catering_${randomUUID()}`,
+    registrationId: access.registration.id,
+    createdAt: now,
+    updatedAt: now,
+    status: 'PENDING_PAYMENT',
+    cateringSelection: normalizedSelection,
+    cateringDaysCount: selectedDays.length,
+    amount: getCateringAmount(normalizedSelection),
+    currency: 'EUR',
+    pricePerDay: CATERING_PRICE_PER_DAY,
+    stripeCheckoutSessionId: '',
+    stripePaymentIntentId: '',
+    stripeCustomerId: '',
+    stripeLastEventType: '',
+    stripeLastEventAt: '',
+    paidAt: '',
+    source: 'token_registration',
+    notes: ''
+  };
+
+  db.exec('BEGIN');
+  try {
+    insertCateringOrder(db, order);
+    markCateringAccessTokenUsed(db, access.token.id);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+
+  return {
+    token: access.token,
+    registration: access.registration,
+    order
+  };
 }
 
 function updateRegistrationStripeTracking(db, registrationId, tracking = {}) {
@@ -3109,6 +3964,140 @@ async function createCheckoutSessionForRegistration(db, registrationId, options 
   };
 }
 
+async function createStripeCheckoutSessionForCateringOrder(registration, cateringOrder, options = {}) {
+  if (!isStripeEnabled()) {
+    throw createError(503, 'Stripe is not configured. Missing STRIPE_SECRET_KEY.');
+  }
+
+  const currency = String(cateringOrder.currency || 'EUR').toLowerCase();
+  const amountMinor = toStripeMinorUnits(cateringOrder.amount || 0, cateringOrder.currency || 'EUR');
+  const selectedDays = getSelectedCateringDays(cateringOrder.cateringSelection);
+  const description = selectedDays.length > 0
+    ? `Lunch on ${selectedDays.map((day) => CATERING_DAY_OPTIONS[day] || day).join(', ')}`
+    : 'Lunch';
+  const successUrl = buildStripeSuccessUrlForCatering(String(options.successUrl || STRIPE_SUCCESS_URL).trim(), cateringOrder.id);
+  const cancelUrl = String(
+    options.cancelUrl || `${APP_BASE_URL}/catering-registration?state=unpaid&order_id=${encodeURIComponent(cateringOrder.id)}`
+  ).trim();
+
+  const formBody = createStripeFormBody({
+    mode: 'payment',
+    success_url: successUrl,
+    cancel_url: cancelUrl,
+    customer_email: registration.email,
+    client_reference_id: cateringOrder.id,
+    'metadata[entity_type]': 'catering_order',
+    'metadata[catering_order_id]': cateringOrder.id,
+    'metadata[registration_id]': registration.id,
+    'metadata[source]': options.source || 'catering',
+    'line_items[0][quantity]': 1,
+    'line_items[0][price_data][currency]': currency,
+    'line_items[0][price_data][unit_amount]': amountMinor,
+    'line_items[0][price_data][product_data][name]': 'Lunch',
+    'line_items[0][price_data][product_data][description]': description
+  });
+
+  const response = await fetch(`${STRIPE_API_BASE_URL}/checkout/sessions`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${STRIPE_SECRET_KEY}`,
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body: formBody,
+    signal: AbortSignal.timeout(STRIPE_REQUEST_TIMEOUT_MS)
+  });
+
+  const raw = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    const stripeMessage = payload?.error?.message || raw || 'Stripe API request failed.';
+    throw createError(response.status >= 400 && response.status < 500 ? 400 : 502, `Stripe session creation failed: ${stripeMessage}`);
+  }
+
+  const checkoutUrl = String(payload?.url || '').trim();
+  const sessionId = String(payload?.id || '').trim();
+  if (!checkoutUrl || !sessionId) {
+    throw createError(502, 'Stripe response did not include checkout URL.');
+  }
+
+  return { id: sessionId, url: checkoutUrl };
+}
+
+async function createCheckoutSessionForCateringOrder(db, cateringOrderId, options = {}) {
+  const cateringOrder = getCateringOrderById(db, cateringOrderId);
+  if (!cateringOrder) {
+    throw createError(404, 'Catering order not found.');
+  }
+  if (cateringOrder.status === 'PAID') {
+    throw createError(400, 'Catering order is already paid.');
+  }
+
+  const registration = getRegistrationById(db, cateringOrder.registrationId);
+  if (!registration) {
+    throw createError(404, 'Registration not found for catering order.');
+  }
+
+  const session = await createStripeCheckoutSessionForCateringOrder(registration, cateringOrder, options);
+  await runWithSqliteRetry(() => updateCateringOrderStripeTracking(db, cateringOrder.id, {
+    checkoutSessionId: session.id,
+    lastEventType: 'checkout.session.created',
+    lastEventAt: new Date().toISOString()
+  }));
+
+  return { registration, cateringOrder, session };
+}
+
+function syncCateringOrderFromStripeSession(db, session, options = {}) {
+  const eventType = String(options.eventType || '').trim();
+  const eventCreatedAt = String(options.eventCreatedAt || '').trim() || new Date().toISOString();
+  const identifiers = extractStripeSessionIdentifiers(session);
+
+  let cateringOrderId = extractCateringOrderIdFromStripeSession(session);
+  if (!cateringOrderId && identifiers.checkoutSessionId) {
+    const bySession = getCateringOrderByStripeCheckoutSessionId(db, identifiers.checkoutSessionId);
+    cateringOrderId = bySession?.id || '';
+  }
+  if (!cateringOrderId) {
+    return { cateringOrderId: '', found: false, paid: isStripeSessionPaid(session, eventType), statusChanged: false };
+  }
+
+  const existing = getCateringOrderById(db, cateringOrderId);
+  if (!existing) {
+    return { cateringOrderId: '', found: false, paid: isStripeSessionPaid(session, eventType), statusChanged: false };
+  }
+
+  updateCateringOrderStripeTracking(db, cateringOrderId, {
+    checkoutSessionId: identifiers.checkoutSessionId,
+    paymentIntentId: identifiers.paymentIntentId,
+    customerId: identifiers.customerId,
+    lastEventType: eventType,
+    lastEventAt: eventCreatedAt,
+    paidAt: isStripeSessionPaid(session, eventType) ? eventCreatedAt : ''
+  });
+
+  const paid = isStripeSessionPaid(session, eventType);
+  let statusChanged = false;
+  if (paid) {
+    statusChanged = updateCateringOrderStatus(db, cateringOrderId, 'PAID', { paidAt: eventCreatedAt }) > 0;
+  }
+
+  return {
+    cateringOrderId,
+    found: true,
+    paid,
+    statusChanged,
+    checkoutSessionId: identifiers.checkoutSessionId,
+    paymentIntentId: identifiers.paymentIntentId,
+    customerId: identifiers.customerId
+  };
+}
+
 function insertRegistration(db, registration) {
   const currentGradeIaido = String(registration.currentGradeIaido || '').trim();
   const currentGradeJodo = String(registration.currentGradeJodo || '').trim();
@@ -3123,11 +4112,11 @@ function insertRegistration(db, registration) {
       camp_type, attendance_day, meal_plan, accommodation,
       wants_exam, target_grade, wants_exam_iaido, target_grade_iaido, wants_exam_jodo, target_grade_jodo,
       billing_full_name, billing_zip, billing_city, billing_address, billing_country,
-      food_notes, price_breakdown,
+      food_notes, catering_selection_json, catering_days_count, catering_amount, catering_locked_at, price_breakdown,
       stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_last_event_type, stripe_last_event_at, paid_at,
       privacy_consent, terms_consent,
       privacy_policy_version, terms_version, privacy_consent_at, terms_consent_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   insert.run(
@@ -3160,6 +4149,10 @@ function insertRegistration(db, registration) {
     registration.billingAddress,
     registration.billingCountry,
     registration.foodNotes,
+    stringifyCateringSelection(registration.cateringSelection),
+    Number(registration.cateringDaysCount || 0),
+    Number(registration.cateringAmount || 0),
+    String(registration.cateringLockedAt || ''),
     JSON.stringify(registration.priceBreakdown),
     String(registration.stripeCheckoutSessionId || ''),
     String(registration.stripePaymentIntentId || ''),
@@ -3231,6 +4224,20 @@ function hardDeleteRegistration(db, registrationId) {
 
   db.exec('BEGIN');
   try {
+    const deleteCateringInvoiceRecord = db.prepare(`
+      DELETE FROM catering_invoice_records
+      WHERE catering_order_id IN (
+        SELECT id FROM catering_orders WHERE registration_id = ?
+      )
+    `);
+    deleteCateringInvoiceRecord.run(safeRegistrationId);
+
+    const deleteCateringAccessTokens = db.prepare('DELETE FROM catering_access_tokens WHERE registration_id = ?');
+    deleteCateringAccessTokens.run(safeRegistrationId);
+
+    const deleteCateringOrders = db.prepare('DELETE FROM catering_orders WHERE registration_id = ?');
+    deleteCateringOrders.run(safeRegistrationId);
+
     const deleteInvoiceRecord = db.prepare('DELETE FROM invoice_records WHERE registration_id = ?');
     deleteInvoiceRecord.run(safeRegistrationId);
 
@@ -3415,6 +4422,7 @@ function sanitizePayload(payload, pricingSettings = DEFAULT_PRICING_SETTINGS) {
     : (requiresAttendanceDay(campType) ? rawAttendanceDay : '');
   const mealPlan = toEnumValue(payload.mealPlan, pricingSettings.prices.mealPlan, 'none');
   const accommodation = toEnumValue(payload.accommodation, pricingSettings.prices.accommodation, 'none');
+  const cateringSelection = normalizeCateringSelection(payload.cateringSelection);
 
   return {
     fullName: String(payload.fullName || '').trim(),
@@ -3428,6 +4436,8 @@ function sanitizePayload(payload, pricingSettings = DEFAULT_PRICING_SETTINGS) {
     attendanceDay,
     mealPlan,
     accommodation,
+    rawCateringSelection: payload.cateringSelection,
+    cateringSelection,
     wantsExamIaido,
     targetGradeIaido: wantsExamIaido ? String(fallbackTargetGradeIaido).trim() : '',
     wantsExamJodo,
@@ -3479,6 +4489,9 @@ function validateRegistration(data, pricingSettings = DEFAULT_PRICING_SETTINGS) 
   }
   if (!Object.prototype.hasOwnProperty.call(pricingSettings.prices.accommodation, data.accommodation)) {
     errors.push('Invalid accommodation option.');
+  }
+  if (!isValidCateringSelectionInput(data.rawCateringSelection)) {
+    errors.push('Invalid lunch day selection.');
   }
 
   if (data.wantsExamIaido && !isNonEmptyString(data.targetGradeIaido)) {
@@ -3603,6 +4616,9 @@ function buildCsvExport(registrations) {
     'attendance_day',
     'meal_plan',
     'accommodation',
+    'catering_days',
+    'catering_days_count',
+    'catering_amount',
     'wants_exam_iaido',
     'target_grade_iaido',
     'wants_exam_jodo',
@@ -3645,6 +4661,9 @@ function buildCsvExport(registrations) {
     const campPrice = campItem?.amount ?? campItem?.amountHuf ?? '';
     const mealPrice = mealItem?.amount ?? mealItem?.amountHuf ?? '';
     const accommodationPrice = accommodationItem?.amount ?? accommodationItem?.amountHuf ?? '';
+    const cateringItem = lineItems.find((item) => item.key === 'catering');
+    const cateringDays = getSelectedCateringDays(registration.cateringSelection || {}).join(' | ');
+    const cateringAmount = cateringItem?.amount ?? registration.cateringAmount ?? '';
 
     const row = [
       registration.id,
@@ -3660,6 +4679,9 @@ function buildCsvExport(registrations) {
       registration.attendanceDay,
       registration.mealPlan,
       registration.accommodation,
+      cateringDays,
+      registration.cateringDaysCount,
+      cateringAmount,
       registration.wantsExamIaido ? 'true' : 'false',
       registration.targetGradeIaido,
       registration.wantsExamJodo ? 'true' : 'false',
@@ -3693,6 +4715,173 @@ function buildCsvExport(registrations) {
   }
 
   return `\uFEFF${csvRows.join('\n')}\n`;
+}
+
+function buildCateringOrdersCsvExport(cateringOrders, registrationsById = new Map()) {
+  const headers = [
+    'order_id',
+    'registration_id',
+    'status',
+    'full_name',
+    'email',
+    'camp_type',
+    'catering_days',
+    'catering_days_count',
+    'amount',
+    'currency',
+    'price_per_day',
+    'stripe_checkout_session_id',
+    'stripe_payment_intent_id',
+    'stripe_customer_id',
+    'stripe_last_event_type',
+    'stripe_last_event_at',
+    'paid_at',
+    'created_at',
+    'updated_at'
+  ];
+
+  const csvRows = [headers.map(escapeCsvValue).join(',')];
+  for (const order of cateringOrders) {
+    const registration = registrationsById.get(order.registrationId) || {};
+    const row = [
+      order.id,
+      order.registrationId,
+      order.status,
+      registration.fullName || '',
+      registration.email || '',
+      registration.campType || '',
+      getSelectedCateringDays(order.cateringSelection).join(' | '),
+      order.cateringDaysCount,
+      order.amount,
+      order.currency,
+      order.pricePerDay,
+      order.stripeCheckoutSessionId,
+      order.stripePaymentIntentId,
+      order.stripeCustomerId,
+      order.stripeLastEventType,
+      order.stripeLastEventAt,
+      order.paidAt,
+      order.createdAt,
+      order.updatedAt
+    ];
+    csvRows.push(row.map(escapeCsvValue).join(','));
+  }
+  return `\uFEFF${csvRows.join('\n')}\n`;
+}
+
+function buildCombinedCateringCsvExport(registrations, cateringOrders) {
+  const headers = [
+    'source_type',
+    'source_id',
+    'registration_id',
+    'registration_status',
+    'order_status',
+    'full_name',
+    'email',
+    'camp_type',
+    'catering_days',
+    'catering_days_count',
+    'amount',
+    'currency',
+    'paid_at',
+    'created_at',
+    'updated_at'
+  ];
+
+  const csvRows = [headers.map(escapeCsvValue).join(',')];
+
+  for (const registration of registrations) {
+    const selectedDays = getSelectedCateringDays(registration.cateringSelection);
+    if (!selectedDays.length) continue;
+
+    const row = [
+      'registration',
+      registration.id,
+      registration.id,
+      registration.status,
+      '',
+      registration.fullName,
+      registration.email,
+      registration.campType,
+      selectedDays.join(' | '),
+      registration.cateringDaysCount,
+      registration.cateringAmount,
+      registration.currency || 'EUR',
+      registration.paidAt || '',
+      registration.createdAt,
+      registration.createdAt
+    ];
+    csvRows.push(row.map(escapeCsvValue).join(','));
+  }
+
+  const registrationsById = new Map(registrations.map((item) => [item.id, item]));
+  for (const order of cateringOrders) {
+    const registration = registrationsById.get(order.registrationId) || {};
+    const row = [
+      'catering_order',
+      order.id,
+      order.registrationId,
+      registration.status || '',
+      order.status,
+      registration.fullName || '',
+      registration.email || '',
+      registration.campType || '',
+      getSelectedCateringDays(order.cateringSelection).join(' | '),
+      order.cateringDaysCount,
+      order.amount,
+      order.currency,
+      order.paidAt,
+      order.createdAt,
+      order.updatedAt
+    ];
+    csvRows.push(row.map(escapeCsvValue).join(','));
+  }
+
+  return `\uFEFF${csvRows.join('\n')}\n`;
+}
+
+function buildLunchDaySummary(registrations, cateringOrders) {
+  const summary = {};
+  for (const day of Object.keys(CATERING_DAY_OPTIONS)) {
+    summary[day] = 0;
+  }
+
+  const activeRegistrations = registrations.filter((item) => item.status !== 'DELETED' && item.status !== 'ANONYMIZED');
+  const activeRegistrationIds = new Set(activeRegistrations.map((item) => item.id));
+
+  activeRegistrations.forEach((item) => {
+    getSelectedCateringDays(item.cateringSelection).forEach((day) => {
+      summary[day] += 1;
+    });
+  });
+
+  cateringOrders
+    .filter((item) => activeRegistrationIds.has(item.registrationId))
+    .forEach((item) => {
+      getSelectedCateringDays(item.cateringSelection).forEach((day) => {
+        summary[day] += 1;
+      });
+    });
+
+  return summary;
+}
+
+function buildAdminCateringOrderRows(db) {
+  const registrations = readRegistrations(db);
+  const registrationsById = new Map(registrations.map((item) => [item.id, item]));
+  const orders = readCateringOrders(db);
+  return orders.map((order) => {
+    const registration = registrationsById.get(order.registrationId) || null;
+    const invoice = getCateringInvoiceRecordByOrderId(db, order.id);
+    return {
+      ...order,
+      registrationFullName: registration?.fullName || '',
+      registrationEmail: registration?.email || '',
+      campType: registration?.campType || '',
+      invoiceStatus: invoice?.status || '',
+      invoiceNumber: invoice?.invoiceNumber || ''
+    };
+  });
 }
 
 function parseCookies(req) {
@@ -3794,6 +4983,18 @@ function buildRetryPaymentUrl(token) {
   return `${APP_BASE_URL}/retry-payment?token=${encodeURIComponent(safeToken)}`;
 }
 
+function hashOpaqueToken(token) {
+  return createHash('sha256').update(String(token || '')).digest('hex');
+}
+
+function generateCateringAccessTokenValue() {
+  return `cat_${randomUUID()}_${randomBytes(24).toString('hex')}`;
+}
+
+function buildCateringAccessUrl(token) {
+  return `${APP_BASE_URL}/catering-registration?token=${encodeURIComponent(String(token || '').trim())}`;
+}
+
 function buildRetryPaymentEmailMessage(registration, retryUrl, expiresAtIso) {
   const fullName = String(registration?.fullName || '').trim() || 'Participant';
   const registrationId = String(registration?.id || '').trim();
@@ -3847,6 +5048,129 @@ function buildRetryPaymentEmailMessage(registration, retryUrl, expiresAtIso) {
   return { subject, text, html };
 }
 
+function buildCateringInvitationEmailMessage(registration, inviteUrl) {
+  const fullName = String(registration?.fullName || '').trim() || 'Participant';
+  const subject = 'Lunch registration - Ishido Sensei Summer Seminar 2026';
+  const text = [
+    `Dear ${fullName},`,
+    '',
+    'Lunch registration is now available for the Summer Seminar 2026.',
+    'Please use your personal link below to select the days for which you would like to order lunch at the venue:',
+    inviteUrl,
+    '',
+    `Lunch price: ${formatCurrency(CATERING_PRICE_PER_DAY, 'EUR')} per person per day.`,
+    'The venue cafeteria is part of a university canteen, so individual dietary requests cannot be accommodated.',
+    '',
+    'Best regards,',
+    'The Organizing Team'
+  ].join('\n');
+  const html = `
+    <h2>Lunch registration</h2>
+    <p>Dear ${escapeHtml(fullName)},</p>
+    <p>Lunch registration is now available for the Summer Seminar 2026.</p>
+    <p>Please use your personal link below to select the days for which you would like to order lunch at the venue:</p>
+    <p><a href="${escapeHtml(inviteUrl)}">${escapeHtml(inviteUrl)}</a></p>
+    <p><strong>Lunch price:</strong> ${escapeHtml(formatCurrency(CATERING_PRICE_PER_DAY, 'EUR'))} per person per day.</p>
+    <p>The venue cafeteria is part of a university canteen, so individual dietary requests cannot be accommodated.</p>
+    <p>Best regards,<br />The Organizing Team</p>
+  `;
+  return { subject, text, html };
+}
+
+function buildCateringRetryPaymentToken(cateringOrderId) {
+  const exp = Math.floor(Date.now() / 1000) + RETRY_PAYMENT_LINK_TTL_SECONDS;
+  const payload = {
+    purpose: 'retry_catering_payment',
+    cateringOrderId: String(cateringOrderId || '').trim(),
+    exp,
+    nonce: randomUUID()
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = signRetryPaymentPayload(`catering:${encodedPayload}`);
+  return {
+    token: `${encodedPayload}.${signature}`,
+    expiresAt: new Date(exp * 1000).toISOString()
+  };
+}
+
+function verifyCateringRetryPaymentToken(token) {
+  if (typeof token !== 'string' || !token.includes('.')) return null;
+  const [encodedPayload, signature, ...rest] = token.split('.');
+  if (!encodedPayload || !signature || rest.length > 0) return null;
+  const expected = signRetryPaymentPayload(`catering:${encodedPayload}`);
+  if (!safeEqualStrings(signature, expected)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+    if (payload.purpose !== 'retry_catering_payment') return null;
+    if (typeof payload.cateringOrderId !== 'string' || payload.cateringOrderId.trim().length === 0) return null;
+    if (typeof payload.exp !== 'number' || payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function buildCateringRetryPaymentUrl(token) {
+  return `${APP_BASE_URL}/retry-catering-payment?token=${encodeURIComponent(String(token || '').trim())}`;
+}
+
+function buildCateringRetryPaymentEmailMessage(registration, cateringOrder, retryUrl, expiresAtIso) {
+  const fullName = String(registration?.fullName || '').trim() || 'Participant';
+  const expiresAtText = expiresAtIso ? new Date(expiresAtIso).toLocaleString('en-GB') : '';
+  const subject = `Lunch payment link - ${cateringOrder.id}`;
+  const textLines = [
+    `Dear ${fullName},`,
+    '',
+    'Your lunch registration was saved, but the payment has not been completed yet.',
+    'Please use the secure payment link below to complete the payment for your lunch selection:',
+    retryUrl,
+    '',
+    `Order ID: ${cateringOrder.id}`,
+    `Amount Due: ${formatCurrency(cateringOrder.amount, cateringOrder.currency || 'EUR')}`
+  ];
+  if (expiresAtText) {
+    textLines.push(`Link Expires At: ${expiresAtText}`);
+  }
+  textLines.push('', 'Best regards,', 'The Organizing Team');
+  const text = textLines.join('\n');
+  const html = `
+    <h2>Lunch payment link</h2>
+    <p>Dear ${escapeHtml(fullName)},</p>
+    <p>Your lunch registration was saved, but the payment has not been completed yet.</p>
+    <p>Please use the secure payment link below to complete the payment for your lunch selection:</p>
+    <p><a href="${escapeHtml(retryUrl)}">${escapeHtml(retryUrl)}</a></p>
+    <p><strong>Order ID:</strong> ${escapeHtml(cateringOrder.id)}<br /><strong>Amount Due:</strong> ${escapeHtml(formatCurrency(cateringOrder.amount, cateringOrder.currency || 'EUR'))}${expiresAtText ? `<br /><strong>Link Expires At:</strong> ${escapeHtml(expiresAtText)}` : ''}</p>
+    <p>Best regards,<br />The Organizing Team</p>
+  `;
+  return { subject, text, html };
+}
+
+function buildCateringPaymentConfirmationEmailMessage(registration, cateringOrder) {
+  const fullName = String(registration?.fullName || '').trim() || 'Participant';
+  const selectedDays = getSelectedCateringDays(cateringOrder.cateringSelection)
+    .map((day) => CATERING_DAY_OPTIONS[day] || day);
+  const daysText = selectedDays.length > 0 ? selectedDays.join(', ') : '-';
+  const subject = 'Lunch registration confirmed - Ishido Sensei Summer Seminar 2026';
+  const text = [
+    `Dear ${fullName},`,
+    '',
+    'Your lunch registration has been confirmed and your payment has been received.',
+    `Selected lunch days: ${daysText}`,
+    `Total paid: ${formatCurrency(cateringOrder.amount, cateringOrder.currency || 'EUR')}`,
+    '',
+    'Best regards,',
+    'The Organizing Team'
+  ].join('\n');
+  const html = `
+    <h2>Lunch registration confirmed</h2>
+    <p>Dear ${escapeHtml(fullName)},</p>
+    <p>Your lunch registration has been confirmed and your payment has been received.</p>
+    <p><strong>Selected lunch days:</strong> ${escapeHtml(daysText)}<br /><strong>Total paid:</strong> ${escapeHtml(formatCurrency(cateringOrder.amount, cateringOrder.currency || 'EUR'))}</p>
+    <p>Best regards,<br />The Organizing Team</p>
+  `;
+  return { subject, text, html };
+}
+
 async function sendRetryPaymentEmail(registration) {
   if (!isSmtpEnabled()) {
     throw createError(503, 'Email sending is not configured. Set SMTP env values first.');
@@ -3867,6 +5191,54 @@ async function sendRetryPaymentEmail(registration) {
   return {
     expiresAt: retry.expiresAt
   };
+}
+
+async function sendCateringInvitationEmail(registration, inviteUrl) {
+  if (!isSmtpEnabled()) {
+    throw createError(503, 'Email sending is not configured. Set SMTP env values first.');
+  }
+
+  const message = buildCateringInvitationEmailMessage(registration, inviteUrl);
+  await sendSmtpEmail({
+    toEmail: registration.email,
+    toName: registration.fullName,
+    subject: message.subject,
+    textContent: message.text,
+    htmlContent: message.html
+  });
+}
+
+async function sendCateringRetryPaymentEmail(registration, cateringOrder) {
+  if (!isSmtpEnabled()) {
+    throw createError(503, 'Email sending is not configured. Set SMTP env values first.');
+  }
+
+  const retry = buildCateringRetryPaymentToken(cateringOrder.id);
+  const retryUrl = buildCateringRetryPaymentUrl(retry.token);
+  const message = buildCateringRetryPaymentEmailMessage(registration, cateringOrder, retryUrl, retry.expiresAt);
+  await sendSmtpEmail({
+    toEmail: registration.email,
+    toName: registration.fullName,
+    subject: message.subject,
+    textContent: message.text,
+    htmlContent: message.html
+  });
+  return { expiresAt: retry.expiresAt };
+}
+
+async function sendCateringPaymentConfirmationEmail(registration, cateringOrder) {
+  if (!isSmtpEnabled()) {
+    return { enabled: false };
+  }
+  const message = buildCateringPaymentConfirmationEmailMessage(registration, cateringOrder);
+  await sendSmtpEmail({
+    toEmail: registration.email,
+    toName: registration.fullName,
+    subject: message.subject,
+    textContent: message.text,
+    htmlContent: message.html
+  });
+  return { enabled: true };
 }
 
 function safeEqualStrings(left, right) {
@@ -4158,7 +5530,7 @@ function serveFile(res, filePath) {
   });
 }
 
-function getStats(registrations) {
+function getStats(registrations, cateringOrders = []) {
   const activeRegistrations = registrations.filter((r) => r.status !== 'DELETED' && r.status !== 'ANONYMIZED');
   const deletedCount = registrations.filter((r) => r.status === 'DELETED').length;
   const anonymizedCount = registrations.filter((r) => r.status === 'ANONYMIZED').length;
@@ -4208,6 +5580,25 @@ function getStats(registrations) {
     }, {});
 
   const lastRegistrationAt = activeRegistrations.length > 0 ? activeRegistrations[activeRegistrations.length - 1].createdAt : null;
+  const lunchDaySummary = buildLunchDaySummary(activeRegistrations, cateringOrders);
+  const activeRegistrationIds = new Set(activeRegistrations.map((item) => item.id));
+  const lunchRegistrantIds = new Set(
+    activeRegistrations
+      .filter((item) => getCateringDaysCount(item.cateringSelection) > 0)
+      .map((item) => item.id)
+  );
+
+  cateringOrders
+    .filter((item) => activeRegistrationIds.has(item.registrationId))
+    .forEach((item) => {
+      lunchRegistrantIds.add(item.registrationId);
+    });
+
+  const totalLunchSelections = activeRegistrations.reduce((sum, item) => sum + getCateringDaysCount(item.cateringSelection), 0)
+    + cateringOrders
+      .filter((item) => activeRegistrationIds.has(item.registrationId))
+      .reduce((sum, item) => sum + getCateringDaysCount(item.cateringSelection), 0);
+  const lunchRegistrantCount = lunchRegistrantIds.size;
 
   return {
     total,
@@ -4229,7 +5620,10 @@ function getStats(registrations) {
     byCurrentGradeJodo,
     byTargetGradeIaido,
     byTargetGradeJodo,
-    lastRegistrationAt
+    lastRegistrationAt,
+    lunchDaySummary,
+    totalLunchSelections,
+    lunchRegistrantCount
   };
 }
 
@@ -4242,8 +5636,10 @@ function getStaticFilePath(urlPath) {
     '/senseis': 'senseis-oshita.html',
     '/senseis/oshita': 'senseis-oshita.html',
     '/senseis/ishii': 'senseis-ishii.html',
+    '/senseis/takizawa': 'senseis-takizawa.html',
     '/payment-success': 'payment-success.html',
     '/payment-cancel': 'payment-cancel.html',
+    '/catering-registration': 'catering-registration.html',
     '/privacy': 'privacy.html',
     '/terms': 'terms.html',
     '/registration': 'registration.html',
@@ -4318,6 +5714,52 @@ function createServer(options = {}) {
       return;
     }
 
+    if (req.method === 'GET' && pathname === '/api/public/catering-config') {
+      sendJson(res, 200, {
+        catering: {
+          pricePerDay: CATERING_PRICE_PER_DAY,
+          days: Object.entries(CATERING_DAY_OPTIONS).map(([code, label]) => ({ code, label }))
+        }
+      });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/catering-access') {
+      const token = String(reqUrl.searchParams.get('token') || '').trim();
+      if (!token) {
+        sendJson(res, 400, { error: 'token is required.' });
+        return;
+      }
+
+      const access = getCateringAccessState(db, token);
+      if (access.state === 'invalid') {
+        sendJson(res, 404, { state: 'invalid', error: 'This lunch registration link is invalid or already used.' });
+        return;
+      }
+
+      sendJson(res, 200, {
+        state: access.state,
+        registration: access.registration ? {
+          id: access.registration.id,
+          fullName: access.registration.fullName,
+          email: access.registration.email,
+          campType: access.registration.campType
+        } : null,
+        cateringOrder: access.cateringOrder ? {
+          id: access.cateringOrder.id,
+          status: access.cateringOrder.status,
+          amount: access.cateringOrder.amount,
+          currency: access.cateringOrder.currency,
+          cateringSelection: access.cateringOrder.cateringSelection
+        } : null,
+        catering: {
+          pricePerDay: CATERING_PRICE_PER_DAY,
+          days: Object.entries(CATERING_DAY_OPTIONS).map(([code, label]) => ({ code, label }))
+        }
+      });
+      return;
+    }
+
     if (req.method === 'GET' && pathname === '/retry-payment') {
       const token = String(reqUrl.searchParams.get('token') || '').trim();
       const payload = verifyRetryPaymentToken(token);
@@ -4340,6 +5782,35 @@ function createServer(options = {}) {
         sendHtml(res, status, buildRetryPaymentPage({
           title: 'Retry Payment Unavailable',
           message: error.message || 'Could not restart payment. Please request a new payment link from the organizer.',
+          registration
+        }));
+        return;
+      }
+    }
+
+    if (req.method === 'GET' && pathname === '/retry-catering-payment') {
+      const token = String(reqUrl.searchParams.get('token') || '').trim();
+      const payload = verifyCateringRetryPaymentToken(token);
+      if (!payload) {
+        sendHtml(res, 400, buildRetryPaymentPage({
+          title: 'Invalid Lunch Payment Link',
+          message: 'This lunch payment link is invalid or expired. Please request a new link from the organizer.'
+        }));
+        return;
+      }
+
+      try {
+        const result = await createCheckoutSessionForCateringOrder(db, payload.cateringOrderId, { source: 'catering_retry_link' });
+        res.writeHead(302, { Location: result.session.url });
+        res.end();
+        return;
+      } catch (error) {
+        const cateringOrder = getCateringOrderById(db, payload.cateringOrderId);
+        const registration = cateringOrder ? getRegistrationById(db, cateringOrder.registrationId) : null;
+        const status = Number(error.statusCode) || 400;
+        sendHtml(res, status, buildRetryPaymentPage({
+          title: 'Lunch Payment Unavailable',
+          message: error.message || 'Could not restart lunch payment. Please request a new payment link from the organizer.',
           registration
         }));
         return;
@@ -4496,6 +5967,69 @@ function createServer(options = {}) {
           return;
         }
         sendJson(res, 400, { error: error.message || 'Invalid request' });
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/admin/catering/send-invites-to-paid') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      try {
+        const registrations = readRegistrations(db);
+        const cateringOrders = readCateringOrders(db);
+        const cateringRegistrationIds = new Set(cateringOrders.map((item) => item.registrationId));
+        const decoratedRegistrations = registrations.map((item) => ({
+          ...item,
+          hasCateringOrder: cateringRegistrationIds.has(item.id)
+        }));
+        const recipients = selectEligibleCateringInviteRecipients(decoratedRegistrations);
+
+        if (recipients.length === 0) {
+          sendJson(res, 400, { error: 'No eligible paid registrations found for lunch invite emails.' });
+          return;
+        }
+        if (recipients.length > ADMIN_EMAIL_MAX_RECIPIENTS) {
+          sendJson(res, 400, {
+            error: `Too many recipients in one send operation. Limit: ${ADMIN_EMAIL_MAX_RECIPIENTS}.`
+          });
+          return;
+        }
+
+        let job;
+        try {
+          job = startAdminEmailJob(db, {
+            requestedByIp: getClientIp(req),
+            recipientMode: 'paid_without_lunch',
+            templateKey: 'catering_invite_bulk',
+            subject: 'Lunch registration - Ishido Sensei Summer Seminar 2026',
+            content: 'Lunch invitation job',
+            recipients
+          });
+        } catch (error) {
+          if (Number(error.statusCode) === 409) {
+            sendJson(res, 409, {
+              error: error.message || 'Another admin email job is already running.',
+              ...getAdminEmailJobApiPayload()
+            });
+            return;
+          }
+          throw error;
+        }
+
+        sendJson(res, 202, {
+          message: `Lunch invitation email job started for ${recipients.length} recipient(s).`,
+          ...getAdminEmailJobApiPayload(),
+          startedJobId: job.id
+        });
+      } catch (error) {
+        if (isSqliteBusyError(error)) {
+          sendJson(res, 503, { error: 'Database is currently busy. Please try again in a few seconds.' });
+          return;
+        }
+        sendJson(res, 400, { error: error.message || 'Could not start lunch invitation email job.' });
       }
       return;
     }
@@ -4659,7 +6193,8 @@ function createServer(options = {}) {
         return;
       }
       const registrations = readRegistrations(db);
-      sendJson(res, 200, { stats: getStats(registrations) });
+      const cateringOrders = readCateringOrders(db);
+      sendJson(res, 200, { stats: getStats(registrations, cateringOrders) });
       return;
     }
 
@@ -4669,7 +6204,26 @@ function createServer(options = {}) {
         return;
       }
       const registrations = readRegistrations(db);
-      sendJson(res, 200, { registrations });
+      const cateringOrders = readCateringOrders(db);
+      const cateringRegistrationIds = new Set(cateringOrders.map((item) => item.registrationId));
+      sendJson(res, 200, {
+        registrations: registrations.map((item) => ({
+          ...item,
+          hasCateringOrder: cateringRegistrationIds.has(item.id)
+        }))
+      });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/admin/catering-orders') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+      const registrations = readRegistrations(db);
+      const orders = buildAdminCateringOrderRows(db);
+      const summary = buildLunchDaySummary(registrations, readCateringOrders(db));
+      sendJson(res, 200, { orders, summary });
       return;
     }
 
@@ -4705,6 +6259,26 @@ function createServer(options = {}) {
       return;
     }
 
+    if (req.method === 'GET' && pathname === '/api/admin/catering-orders/export.csv') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      const registrations = readRegistrations(db);
+      const orders = readCateringOrders(db);
+      const csv = buildCombinedCateringCsvExport(registrations, orders);
+      const exportDate = new Date().toISOString().slice(0, 10);
+
+      res.writeHead(200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename=\"all-catering-${exportDate}.csv\"`,
+        'Cache-Control': 'no-store'
+      });
+      res.end(csv);
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/admin/backup') {
       if (!isAdminAuthenticated(req, db)) {
         sendJson(res, 401, { error: 'Admin login required.' });
@@ -4724,6 +6298,52 @@ function createServer(options = {}) {
           return;
         }
         sendJson(res, 500, { error: error.message || 'Failed to create backup.' });
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/admin/registrations/send-catering-invite-email') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      try {
+        const body = await parseJsonBody(req);
+        const registrationId = String(body?.registrationId || '').trim();
+        if (!registrationId) {
+          sendJson(res, 400, { error: 'registrationId is required.' });
+          return;
+        }
+
+        const registration = getRegistrationById(db, registrationId);
+        if (!registration) {
+          sendJson(res, 404, { error: 'Registration not found.' });
+          return;
+        }
+        if (registration.status !== 'PAID') {
+          sendJson(res, 400, { error: `Lunch invitation can only be sent for PAID registrations. Current status: ${registration.status}.` });
+          return;
+        }
+        const eligibility = {
+          ...registration,
+          hasCateringOrder: Boolean(getCateringOrderByRegistrationId(db, registrationId))
+        };
+        if (!isRegistrationEligibleForCateringInvite(eligibility)) {
+          sendJson(res, 400, { error: 'Lunch invitation is not available for this registration.' });
+          return;
+        }
+
+        const tokenPayload = await runWithSqliteRetry(() => createCateringAccessToken(db, registrationId, 'admin'));
+        await sendCateringInvitationEmail(registration, tokenPayload.url);
+        sendJson(res, 200, {
+          message: 'Lunch invitation email sent.',
+          email: registration.email,
+          url: tokenPayload.url
+        });
+      } catch (error) {
+        const statusCode = Number(error.statusCode) || 400;
+        sendJson(res, statusCode, { error: error.message || 'Could not send lunch invitation email.' });
       }
       return;
     }
@@ -4883,6 +6503,132 @@ function createServer(options = {}) {
         }
         const statusCode = Number(error.statusCode) || 400;
         sendJson(res, statusCode, { error: error.message || 'Could not check Stripe payment.' });
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/admin/catering-orders/send-retry-payment-email') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      try {
+        const body = await parseJsonBody(req);
+        const cateringOrderId = String(body?.cateringOrderId || '').trim();
+        if (!cateringOrderId) {
+          sendJson(res, 400, { error: 'cateringOrderId is required.' });
+          return;
+        }
+        const order = getCateringOrderById(db, cateringOrderId);
+        if (!order) {
+          sendJson(res, 404, { error: 'Catering order not found.' });
+          return;
+        }
+        if (order.status === 'PAID') {
+          sendJson(res, 400, { error: 'This lunch order is already paid.' });
+          return;
+        }
+        const registration = getRegistrationById(db, order.registrationId);
+        if (!registration) {
+          sendJson(res, 404, { error: 'Registration not found for this lunch order.' });
+          return;
+        }
+        const result = await sendCateringRetryPaymentEmail(registration, order);
+        sendJson(res, 200, {
+          message: 'Lunch payment link email sent.',
+          email: registration.email,
+          expiresAt: result.expiresAt
+        });
+      } catch (error) {
+        const statusCode = Number(error.statusCode) || 400;
+        sendJson(res, statusCode, { error: error.message || 'Could not send lunch payment link.' });
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/admin/catering-orders/check-stripe-payment') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      try {
+        const body = await parseJsonBody(req);
+        const cateringOrderId = String(body?.cateringOrderId || '').trim();
+        if (!cateringOrderId) {
+          sendJson(res, 400, { error: 'cateringOrderId is required.' });
+          return;
+        }
+        const order = getCateringOrderById(db, cateringOrderId);
+        if (!order) {
+          sendJson(res, 404, { error: 'Catering order not found.' });
+          return;
+        }
+        const checkoutSessionId = String(order.stripeCheckoutSessionId || '').trim();
+        if (!checkoutSessionId) {
+          sendJson(res, 400, { error: 'No Stripe session is stored for this lunch order.' });
+          return;
+        }
+
+        const session = await getStripeCheckoutSession(checkoutSessionId);
+        const stripeOrderId = extractCateringOrderIdFromStripeSession(session);
+        if (stripeOrderId && stripeOrderId !== order.id) {
+          sendJson(res, 409, { error: `Stripe session catering order mismatch. Stripe points to ${stripeOrderId}, expected ${order.id}.` });
+          return;
+        }
+
+        const stripeCurrency = String(session?.currency || '').trim().toUpperCase();
+        const stripeAmountMinor = Number(session?.amount_total ?? NaN);
+        const expectedMinor = toStripeMinorUnits(order.amount, order.currency || 'EUR');
+        if (stripeCurrency && stripeCurrency !== String(order.currency || 'EUR').toUpperCase()) {
+          sendJson(res, 409, { error: `Stripe currency mismatch. Stripe: ${stripeCurrency}, order: ${order.currency}.` });
+          return;
+        }
+        if (Number.isFinite(stripeAmountMinor) && stripeAmountMinor !== expectedMinor) {
+          sendJson(res, 409, { error: `Stripe amount mismatch. Stripe: ${stripeAmountMinor}, order: ${expectedMinor} (minor units).` });
+          return;
+        }
+
+        const eventCreatedAt = stripeUnixToIso(session?.created) || new Date().toISOString();
+        const syncResult = await runWithSqliteRetry(() => syncCateringOrderFromStripeSession(db, session, {
+          eventType: 'checkout.session.admin_lookup',
+          eventCreatedAt
+        }));
+
+        let invoice = null;
+        let invoiceWarning = '';
+        if (syncResult.paid && isSzamlazzEnabled()) {
+          try {
+            const invoiceResult = await createInvoiceForCateringOrder(db, syncResult.cateringOrderId, {
+              triggerSource: 'stripe_admin_check'
+            });
+            invoice = invoiceResult.invoice;
+          } catch (invoiceError) {
+            invoiceWarning = invoiceError.message || 'Invoice creation failed.';
+            console.error(`Catering invoice creation failed for ${syncResult.cateringOrderId}: ${invoiceWarning}`);
+          }
+        }
+
+        const updatedOrder = getCateringOrderById(db, syncResult.cateringOrderId);
+        sendJson(res, 200, {
+          message: syncResult.paid ? 'Stripe payment matched and lunch order was updated.' : 'Stripe session found, but payment is not completed yet.',
+          cateringOrderId: syncResult.cateringOrderId,
+          cateringOrderStatus: updatedOrder?.status || 'UNKNOWN',
+          paid: Boolean(syncResult.paid),
+          stripe: {
+            sessionId: getStripeStringId(session?.id),
+            paymentStatus: String(session?.payment_status || '').trim().toLowerCase(),
+            checkoutStatus: String(session?.status || '').trim().toLowerCase(),
+            paymentIntentId: getStripeStringId(session?.payment_intent),
+            customerId: getStripeStringId(session?.customer)
+          },
+          invoice,
+          invoiceWarning
+        });
+      } catch (error) {
+        const statusCode = Number(error.statusCode) || 400;
+        sendJson(res, statusCode, { error: error.message || 'Lunch Stripe payment check failed.' });
       }
       return;
     }
@@ -5059,7 +6805,8 @@ function createServer(options = {}) {
         const pricing = calculatePricing({
           campType: cleanBody.campType,
           mealPlan: cleanBody.mealPlan,
-          accommodation: cleanBody.accommodation
+          accommodation: cleanBody.accommodation,
+          cateringSelection: cleanBody.cateringSelection
         }, pricingSettings);
 
         const newRegistration = {
@@ -5070,6 +6817,9 @@ function createServer(options = {}) {
           amountHuf: pricing.totalAmount,
           currency: 'EUR',
           priceBreakdown: pricing,
+          cateringDaysCount: getCateringDaysCount(cleanBody.cateringSelection),
+          cateringAmount: getCateringAmount(cleanBody.cateringSelection),
+          cateringLockedAt: '',
           privacyPolicyVersion: PRIVACY_POLICY_VERSION,
           termsVersion: TERMS_VERSION,
           privacyConsentAt: cleanBody.privacyConsent ? new Date().toISOString() : '',
@@ -5126,17 +6876,94 @@ function createServer(options = {}) {
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/api/catering/register') {
+      try {
+        const body = await parseJsonBody(req);
+        const token = String(body?.token || '').trim();
+        if (!isValidCateringSelectionInput(body?.cateringSelection)) {
+          sendJson(res, 400, { error: 'Invalid lunch day selection.' });
+          return;
+        }
+        const selection = normalizeCateringSelection(body?.cateringSelection);
+        const selectedDays = getSelectedCateringDays(selection);
+        if (!token) {
+          sendJson(res, 400, { error: 'token is required.' });
+          return;
+        }
+        if (selectedDays.length === 0) {
+          sendJson(res, 400, { error: 'Select at least one lunch day.' });
+          return;
+        }
+
+        const created = await runWithSqliteRetry(() => createCateringOrderFromToken(db, token, selection));
+
+        let checkoutSession = null;
+        let paymentError = null;
+        try {
+          const checkoutResult = await createCheckoutSessionForCateringOrder(db, created.order.id, { source: 'catering_registration' });
+          checkoutSession = checkoutResult.session;
+        } catch (error) {
+          paymentError = error;
+          console.error(`Stripe session creation failed for ${created.order.id}: ${error.message}`);
+        }
+
+        sendJson(res, 201, {
+          message: checkoutSession
+            ? 'Lunch registration saved. Redirect to Stripe Checkout.'
+            : 'Lunch registration saved, but payment session could not be created. Please contact the organizer.',
+          cateringOrderId: created.order.id,
+          registrationId: created.registration.id,
+          amount: created.order.amount,
+          currency: created.order.currency,
+          payment: {
+            provider: 'stripe',
+            status: checkoutSession ? 'CHECKOUT_READY' : 'CHECKOUT_FAILED',
+            checkoutSessionId: checkoutSession?.id || null,
+            checkoutUrl: checkoutSession?.url || null,
+            error: paymentError ? 'Checkout session creation failed.' : null
+          }
+        });
+      } catch (error) {
+        if (isSqliteBusyError(error)) {
+          sendJson(res, 503, { error: 'Saving failed due to high load. Please try again.' });
+          return;
+        }
+        const statusCode = Number(error.statusCode) || 400;
+        sendJson(res, statusCode, { error: error.message || 'Invalid request' });
+      }
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/payments/create-checkout-session') {
       try {
         const body = await parseJsonBody(req);
         const providedRegistrationId = String(body?.registrationId || '').trim();
         const retryToken = String(body?.retryToken || '').trim();
+        const cateringRetryToken = String(body?.cateringRetryToken || '').trim();
 
         let registrationId = providedRegistrationId;
         const retryPayload = retryToken ? verifyRetryPaymentToken(retryToken) : null;
+        const cateringRetryPayload = cateringRetryToken ? verifyCateringRetryPaymentToken(cateringRetryToken) : null;
 
         if (retryToken && !retryPayload) {
           sendJson(res, 400, { error: 'Invalid or expired retry token.' });
+          return;
+        }
+        if (cateringRetryToken && !cateringRetryPayload) {
+          sendJson(res, 400, { error: 'Invalid or expired catering retry token.' });
+          return;
+        }
+
+        if (cateringRetryPayload) {
+          const result = await createCheckoutSessionForCateringOrder(db, cateringRetryPayload.cateringOrderId, {
+            source: 'catering_retry_token'
+          });
+
+          sendJson(res, 200, {
+            cateringOrderId: result.cateringOrder.id,
+            checkoutSessionId: result.session.id,
+            checkoutUrl: result.session.url
+          });
           return;
         }
 
@@ -5179,6 +7006,55 @@ function createServer(options = {}) {
 
         const session = await getStripeCheckoutSession(sessionId);
         const eventCreatedAt = stripeUnixToIso(session?.created) || new Date().toISOString();
+        const entityType = String(session?.metadata?.entity_type || '').trim();
+
+        if (entityType === 'catering_order') {
+          const syncResult = await runWithSqliteRetry(() => syncCateringOrderFromStripeSession(db, session, {
+            eventType: 'checkout.session.confirm_lookup',
+            eventCreatedAt
+          }));
+
+          if (!syncResult.cateringOrderId) {
+            sendJson(res, 404, { error: 'Could not match this Stripe session to any lunch order.' });
+            return;
+          }
+
+          if (syncResult.paid && isSzamlazzEnabled()) {
+            try {
+              await createInvoiceForCateringOrder(db, syncResult.cateringOrderId, {
+                triggerSource: 'stripe_confirm'
+              });
+            } catch (invoiceError) {
+              console.error(`Catering invoice creation failed for ${syncResult.cateringOrderId}: ${invoiceError.message}`);
+            }
+          }
+
+          const cateringOrder = getCateringOrderById(db, syncResult.cateringOrderId);
+          if (syncResult.paid && syncResult.statusChanged && cateringOrder) {
+            const registration = getRegistrationById(db, cateringOrder.registrationId);
+            if (registration) {
+              sendCateringPaymentConfirmationEmail(registration, cateringOrder).catch((error) => {
+                console.error(`Catering confirmation email failed for ${cateringOrder.id}: ${error.message}`);
+              });
+            }
+          }
+          sendJson(res, 200, {
+            entityType: 'catering_order',
+            cateringOrderId: syncResult.cateringOrderId,
+            registrationId: cateringOrder?.registrationId || '',
+            registrationStatus: cateringOrder?.status || 'UNKNOWN',
+            paid: Boolean(syncResult.paid),
+            stripe: {
+              sessionId: getStripeStringId(session?.id),
+              paymentStatus: String(session?.payment_status || '').trim().toLowerCase(),
+              checkoutStatus: String(session?.status || '').trim().toLowerCase(),
+              paymentIntentId: getStripeStringId(session?.payment_intent),
+              customerId: getStripeStringId(session?.customer)
+            }
+          });
+          return;
+        }
+
         const syncResult = await runWithSqliteRetry(() => syncRegistrationFromStripeSession(db, session, {
           eventType: 'checkout.session.confirm_lookup',
           eventCreatedAt
@@ -5201,6 +7077,7 @@ function createServer(options = {}) {
 
         const registration = getRegistrationById(db, syncResult.registrationId);
         sendJson(res, 200, {
+          entityType: 'registration',
           registrationId: syncResult.registrationId,
           registrationStatus: registration?.status || 'UNKNOWN',
           paid: Boolean(syncResult.paid),
@@ -5267,20 +7144,49 @@ function createServer(options = {}) {
         if (eventType.startsWith('checkout.session.')) {
           const session = event?.data?.object || {};
           const eventCreatedAt = stripeUnixToIso(event?.created) || new Date().toISOString();
-          const syncResult = await runWithSqliteRetry(() => syncRegistrationFromStripeSession(db, session, {
-            eventType,
-            eventCreatedAt
-          }));
+          const entityType = String(session?.metadata?.entity_type || '').trim();
+          if (entityType === 'catering_order') {
+            const syncResult = await runWithSqliteRetry(() => syncCateringOrderFromStripeSession(db, session, {
+              eventType,
+              eventCreatedAt
+            }));
 
-          if (!syncResult.registrationId) {
-            console.warn(`Stripe webhook ${eventType}: registration could not be resolved.`);
-          } else if (syncResult.paid && isSzamlazzEnabled()) {
-            try {
-              await createInvoiceForRegistration(db, syncResult.registrationId, {
-                triggerSource: 'stripe_webhook'
-              });
-            } catch (invoiceError) {
-              console.error(`Invoice creation failed for ${syncResult.registrationId}: ${invoiceError.message}`);
+            if (!syncResult.cateringOrderId) {
+              console.warn(`Stripe webhook ${eventType}: catering order could not be resolved.`);
+            } else if (syncResult.paid && isSzamlazzEnabled()) {
+              try {
+                await createInvoiceForCateringOrder(db, syncResult.cateringOrderId, {
+                  triggerSource: 'stripe_webhook'
+                });
+              } catch (invoiceError) {
+                console.error(`Catering invoice creation failed for ${syncResult.cateringOrderId}: ${invoiceError.message}`);
+              }
+            }
+            if (syncResult.paid && syncResult.statusChanged) {
+              const updatedOrder = getCateringOrderById(db, syncResult.cateringOrderId);
+              const registration = updatedOrder ? getRegistrationById(db, updatedOrder.registrationId) : null;
+              if (updatedOrder && registration) {
+                sendCateringPaymentConfirmationEmail(registration, updatedOrder).catch((error) => {
+                  console.error(`Catering confirmation email failed for ${updatedOrder.id}: ${error.message}`);
+                });
+              }
+            }
+          } else {
+            const syncResult = await runWithSqliteRetry(() => syncRegistrationFromStripeSession(db, session, {
+              eventType,
+              eventCreatedAt
+            }));
+
+            if (!syncResult.registrationId) {
+              console.warn(`Stripe webhook ${eventType}: registration could not be resolved.`);
+            } else if (syncResult.paid && isSzamlazzEnabled()) {
+              try {
+                await createInvoiceForRegistration(db, syncResult.registrationId, {
+                  triggerSource: 'stripe_webhook'
+                });
+              } catch (invoiceError) {
+                console.error(`Invoice creation failed for ${syncResult.registrationId}: ${invoiceError.message}`);
+              }
             }
           }
         }

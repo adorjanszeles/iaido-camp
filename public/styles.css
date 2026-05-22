@@ -641,6 +641,14 @@ h1 {
   margin: 1rem 0 0;
 }
 
+.info-accommodation-card {
+  margin: 1rem 0 2rem;
+}
+
+.info-venue-card {
+  margin: 0 0 2rem;
+}
+
 .venue-photo {
   width: 100%;
   height: auto;
@@ -744,6 +752,11 @@ h1 {
 
 .field.full {
   grid-column: 1 / -1;
+}
+
+.checkbox-group {
+  display: grid;
+  gap: 0.45rem;
 }
 
 .date-picker-single {

@@ -19,6 +19,7 @@
   const priceLinesEl = document.getElementById('price-lines');
   const priceTotalEl = document.getElementById('price-total');
   const pricingTierNoteEl = document.getElementById('pricing-tier-note');
+  const cateringDayEls = Array.from(form.querySelectorAll('input[name="cateringDay"]'));
   const messageEl = document.getElementById('form-message');
   const submitBtn = document.getElementById('submit-btn');
   const campTypesRequiringAttendanceDay = new Set(['one_day', 'one_and_half_days']);
@@ -305,12 +306,29 @@
 
   function getPricingSelection() {
     const campType = String(campTypeEl.value || 'full_seminar');
-    const lineItems = [{ code: campType, ...getOption('campType', campType, 'full_seminar') }];
+    const lineItems = [{ key: 'campType', code: campType, ...getOption('campType', campType, 'full_seminar') }];
+
+    const selectedCateringDays = cateringDayEls
+      .filter((input) => input.checked)
+      .map((input) => String(input.value || '').trim())
+      .filter(Boolean);
+    if (selectedCateringDays.length > 0) {
+      lineItems.push({
+        key: 'catering',
+        code: 'lunch',
+        label: `Lunch (${selectedCateringDays.length} day${selectedCateringDays.length === 1 ? '' : 's'})`,
+        amount: selectedCateringDays.length * 12,
+        regularAmount: selectedCateringDays.length * 12,
+        earlyBirdAmount: selectedCateringDays.length * 12,
+        pricingTier: 'regular'
+      });
+    }
 
     const totalAmount = lineItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
     return {
       campType,
+      selectedCateringDays,
       lineItems,
       totalAmount
     };
@@ -345,6 +363,9 @@
       currentGradeJodo: raw.get('currentGradeJodo'),
       campType,
       attendanceDay,
+      cateringSelection: Object.fromEntries(
+        cateringDayEls.map((input) => [String(input.value || '').trim(), input.checked])
+      ),
       wantsExamIaido: Boolean(raw.get('wantsExamIaido')),
       targetGradeIaido: raw.get('targetGradeIaido'),
       wantsExamJodo: Boolean(raw.get('wantsExamJodo')),
@@ -489,6 +510,9 @@
   campTypeEl.addEventListener('change', () => {
     syncAttendanceDayField();
     renderPriceSummary();
+  });
+  cateringDayEls.forEach((input) => {
+    input.addEventListener('change', renderPriceSummary);
   });
   form.addEventListener('submit', submitForm);
 

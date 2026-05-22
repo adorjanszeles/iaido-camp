@@ -36,12 +36,19 @@
     })
     .then((result) => {
       const status = String(result.registrationStatus || '').trim();
+      const entityType = String(result.entityType || 'registration').trim();
       if (result.paid || status === 'PAID') {
-        subtitleEl.textContent = 'Payment confirmed successfully.';
-        metaEl.textContent = `Registration ID: ${result.registrationId}. Status: ${status || 'PAID'}.`;
+        subtitleEl.textContent = entityType === 'catering_order'
+          ? 'Lunch payment confirmed successfully.'
+          : 'Payment confirmed successfully.';
+        metaEl.textContent = entityType === 'catering_order'
+          ? `Lunch order ID: ${result.cateringOrderId}. Status: ${status || 'PAID'}.`
+          : `Registration ID: ${result.registrationId}. Status: ${status || 'PAID'}.`;
       } else {
-        subtitleEl.textContent = 'Payment return was successful, but payment is not marked as paid yet.';
-        metaEl.textContent = `Current registration status: ${status || 'PENDING_PAYMENT'}. Please contact the organizer if this does not change soon.`;
+        subtitleEl.textContent = entityType === 'catering_order'
+          ? 'Lunch payment return was successful, but the order is not marked as paid yet.'
+          : 'Payment return was successful, but payment is not marked as paid yet.';
+        metaEl.textContent = `Current status: ${status || 'PENDING_PAYMENT'}. Please contact the organizer if this does not change soon.`;
       }
     })
     .catch((error) => {
