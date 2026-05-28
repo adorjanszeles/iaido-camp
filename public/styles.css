@@ -973,6 +973,45 @@ th {
   color: #17314b;
 }
 
+.admin-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(19, 36, 55, 0.52);
+  backdrop-filter: blur(6px);
+}
+
+.admin-modal-overlay[hidden] {
+  display: none;
+}
+
+.admin-modal-card {
+  width: min(680px, 100%);
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  padding: 1.1rem;
+  border: 1px solid rgba(31, 79, 131, 0.18);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(248, 251, 255, 0.98) 0%, rgba(236, 245, 253, 0.98) 100%);
+  box-shadow: var(--shadow);
+}
+
+.admin-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.8rem;
+}
+
+.admin-modal-header h2 {
+  margin: 0;
+}
+
 footer {
   margin-top: auto;
   border-top: 1px solid rgba(35, 73, 111, 0.2);

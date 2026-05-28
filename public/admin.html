@@ -335,6 +335,43 @@
       </footer>
     </div>
 
+    <div class="admin-modal-overlay" id="exam-modal" hidden>
+      <div class="admin-modal-card" role="dialog" aria-modal="true" aria-labelledby="exam-modal-title">
+        <div class="admin-modal-header">
+          <h2 id="exam-modal-title">Update exams</h2>
+          <button class="btn secondary btn-small" id="exam-modal-close-btn" type="button">Close</button>
+        </div>
+        <p class="helper" id="exam-modal-registration-meta"></p>
+        <form id="exam-modal-form" novalidate>
+          <div class="form-grid">
+            <div class="field">
+              <label class="checkline"><input id="exam-modal-iaido-enabled" type="checkbox" /> <span>Iaido exam</span></label>
+            </div>
+            <div class="field">
+              <label for="exam-modal-iaido-grade">Iaido target grade</label>
+              <select id="exam-modal-iaido-grade">
+                <option value="">No target grade</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="checkline"><input id="exam-modal-jodo-enabled" type="checkbox" /> <span>Jodo exam</span></label>
+            </div>
+            <div class="field">
+              <label for="exam-modal-jodo-grade">Jodo target grade</label>
+              <select id="exam-modal-jodo-grade">
+                <option value="">No target grade</option>
+              </select>
+            </div>
+          </div>
+          <div id="exam-modal-message" aria-live="polite"></div>
+          <div class="cta-row">
+            <button class="btn primary" id="exam-modal-save-btn" type="submit">Save exam settings</button>
+            <button class="btn secondary" id="exam-modal-cancel-btn" type="button">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <script src="/js/admin.js?v=20260522-1" defer></script>
   </body>
 </html>

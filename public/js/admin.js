@@ -39,6 +39,17 @@
   const cateringInviteMetaEl = document.getElementById('catering-invite-meta');
   const sendAllCateringInvitesBtn = document.getElementById('send-all-catering-invites-btn');
   const exportCateringCsvBtn = document.getElementById('export-catering-csv-btn');
+  const examModalEl = document.getElementById('exam-modal');
+  const examModalFormEl = document.getElementById('exam-modal-form');
+  const examModalRegistrationMetaEl = document.getElementById('exam-modal-registration-meta');
+  const examModalIaidoEnabledEl = document.getElementById('exam-modal-iaido-enabled');
+  const examModalIaidoGradeEl = document.getElementById('exam-modal-iaido-grade');
+  const examModalJodoEnabledEl = document.getElementById('exam-modal-jodo-enabled');
+  const examModalJodoGradeEl = document.getElementById('exam-modal-jodo-grade');
+  const examModalMessageEl = document.getElementById('exam-modal-message');
+  const examModalCloseBtn = document.getElementById('exam-modal-close-btn');
+  const examModalCancelBtn = document.getElementById('exam-modal-cancel-btn');
+  const examModalSaveBtn = document.getElementById('exam-modal-save-btn');
   let allRegistrations = [];
   let allInvoices = [];
   let allCateringOrders = [];
@@ -50,6 +61,9 @@
   const selectedEmailRecipientIds = new Set();
   let currentEmailJob = null;
   let emailJobPollTimer = null;
+  let examModalRegistrationId = '';
+
+  const examGradeOptions = ['', '6. kyu', '5. kyu', '4. kyu', '3. kyu', '2. kyu', '1. kyu', '1. dan', '2. dan', '3. dan', '4. dan', '5. dan', '6. dan', '7. dan', '8. dan'];
 
   const labels = {
     campType: {
@@ -161,6 +175,75 @@
 
   function boolToYesNo(value) {
     return value ? 'Yes' : 'No';
+  }
+
+  function setExamModalMessage(type, text) {
+    if (!examModalMessageEl) return;
+    if (!text) {
+      examModalMessageEl.className = '';
+      examModalMessageEl.textContent = '';
+      return;
+    }
+    examModalMessageEl.className = `notice ${type}`;
+    examModalMessageEl.textContent = text;
+  }
+
+  function syncExamModalGradeState() {
+    if (examModalIaidoGradeEl) {
+      examModalIaidoGradeEl.disabled = !examModalIaidoEnabledEl?.checked;
+      if (examModalIaidoGradeEl.disabled) {
+        examModalIaidoGradeEl.value = '';
+      }
+    }
+    if (examModalJodoGradeEl) {
+      examModalJodoGradeEl.disabled = !examModalJodoEnabledEl?.checked;
+      if (examModalJodoGradeEl.disabled) {
+        examModalJodoGradeEl.value = '';
+      }
+    }
+  }
+
+  function populateExamGradeSelect(selectEl) {
+    if (!selectEl) return;
+    selectEl.innerHTML = examGradeOptions
+      .map((grade, index) => `<option value="${escapeHtml(grade)}">${index === 0 ? 'No target grade' : escapeHtml(grade)}</option>`)
+      .join('');
+  }
+
+  function closeExamModal() {
+    examModalRegistrationId = '';
+    setExamModalMessage('', '');
+    if (examModalFormEl) {
+      examModalFormEl.reset();
+    }
+    syncExamModalGradeState();
+    if (examModalEl) {
+      examModalEl.hidden = true;
+    }
+  }
+
+  function openExamModal(registration) {
+    examModalRegistrationId = registration.id;
+    if (examModalRegistrationMetaEl) {
+      examModalRegistrationMetaEl.textContent = `${registration.fullName} (${registration.email})`;
+    }
+    if (examModalIaidoEnabledEl) {
+      examModalIaidoEnabledEl.checked = Boolean(registration.wantsExamIaido);
+    }
+    if (examModalIaidoGradeEl) {
+      examModalIaidoGradeEl.value = String(registration.targetGradeIaido || '');
+    }
+    if (examModalJodoEnabledEl) {
+      examModalJodoEnabledEl.checked = Boolean(registration.wantsExamJodo);
+    }
+    if (examModalJodoGradeEl) {
+      examModalJodoGradeEl.value = String(registration.targetGradeJodo || '');
+    }
+    setExamModalMessage('', '');
+    syncExamModalGradeState();
+    if (examModalEl) {
+      examModalEl.hidden = false;
+    }
   }
 
   function buildOptionsText(item) {
@@ -279,11 +362,14 @@
         const retryEmailAction = isDeleted || isAnonymized || isPaid
           ? '<span class="helper">-</span>'
           : `<button class="btn secondary btn-small js-send-retry-email" data-registration-id="${item.id}" type="button">Send payment link email</button>`;
+        const examEditAction = isDeleted || isAnonymized
+          ? '<span class="helper">-</span>'
+          : `<button class="btn secondary btn-small js-edit-exams" data-registration-id="${item.id}" type="button">Update exams</button>`;
         const cateringInviteAction = isPaid && !hasMainLunchSelection && !hasSeparateCateringOrder
           ? `<button class="btn secondary btn-small js-send-catering-invite" data-registration-id="${item.id}" type="button">Send lunch invite</button>`
           : '<span class="helper">-</span>';
         const detailsToggle = `<button class="btn secondary btn-small js-toggle-details" data-registration-id="${item.id}" aria-expanded="false" type="button">Show details</button>`;
-        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${cateringInviteAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}<div style="height:0.35rem"></div>${hardDeleteAction}`;
+        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${examEditAction}<div style="height:0.35rem"></div>${cateringInviteAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}<div style="height:0.35rem"></div>${hardDeleteAction}`;
         const detailRow = `
           <tr class="registration-details-row" data-details-row="${item.id}" hidden>
             <td colspan="7">
@@ -1082,6 +1168,15 @@
     }
   }
 
+  async function updateExams(registrationId) {
+    const registration = allRegistrations.find((item) => item.id === registrationId);
+    if (!registration) {
+      window.alert('Registration not found in the current admin view.');
+      return;
+    }
+    openExamModal(registration);
+  }
+
   async function logout() {
     try {
       await fetch('/api/admin/logout', { method: 'POST' });
@@ -1599,6 +1694,95 @@
     });
   }
 
+  populateExamGradeSelect(examModalIaidoGradeEl);
+  populateExamGradeSelect(examModalJodoGradeEl);
+
+  if (examModalIaidoEnabledEl) {
+    examModalIaidoEnabledEl.addEventListener('change', syncExamModalGradeState);
+  }
+
+  if (examModalJodoEnabledEl) {
+    examModalJodoEnabledEl.addEventListener('change', syncExamModalGradeState);
+  }
+
+  if (examModalCloseBtn) {
+    examModalCloseBtn.addEventListener('click', closeExamModal);
+  }
+
+  if (examModalCancelBtn) {
+    examModalCancelBtn.addEventListener('click', closeExamModal);
+  }
+
+  if (examModalEl) {
+    examModalEl.addEventListener('click', (event) => {
+      if (event.target === examModalEl) {
+        closeExamModal();
+      }
+    });
+  }
+
+  if (examModalFormEl) {
+    examModalFormEl.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!examModalRegistrationId) return;
+
+      const wantsExamIaido = Boolean(examModalIaidoEnabledEl?.checked);
+      const targetGradeIaido = wantsExamIaido ? String(examModalIaidoGradeEl?.value || '').trim() : '';
+      const wantsExamJodo = Boolean(examModalJodoEnabledEl?.checked);
+      const targetGradeJodo = wantsExamJodo ? String(examModalJodoGradeEl?.value || '').trim() : '';
+
+      if (wantsExamIaido && !targetGradeIaido) {
+        setExamModalMessage('error', 'Select an Iaido target grade.');
+        return;
+      }
+      if (wantsExamJodo && !targetGradeJodo) {
+        setExamModalMessage('error', 'Select a Jodo target grade.');
+        return;
+      }
+
+      if (examModalSaveBtn) {
+        examModalSaveBtn.disabled = true;
+        examModalSaveBtn.textContent = 'Saving...';
+      }
+      setExamModalMessage('', '');
+
+      try {
+        const response = await fetch('/api/admin/registrations/update-exams', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            registrationId: examModalRegistrationId,
+            wantsExamIaido,
+            targetGradeIaido,
+            wantsExamJodo,
+            targetGradeJodo
+          })
+        });
+
+        const result = await readJsonResponseOrThrow(response);
+        if (response.status === 401) {
+          window.location.href = '/admin';
+          return;
+        }
+        if (!response.ok) {
+          throw new Error(result.error || 'Failed to update exam selections.');
+        }
+
+        closeExamModal();
+        await loadData();
+      } catch (error) {
+        setExamModalMessage('error', error.message);
+      } finally {
+        if (examModalSaveBtn) {
+          examModalSaveBtn.disabled = false;
+          examModalSaveBtn.textContent = 'Save exam settings';
+        }
+      }
+    });
+  }
+
   if (emailRecipientModeEl) {
     emailRecipientModeEl.addEventListener('change', () => {
       setEmailSelectionControlsState();
@@ -1676,6 +1860,14 @@
       sendRetryPaymentEmail(registrationId).catch((error) => {
         window.alert(error.message);
       });
+      return;
+    }
+
+    const editExamsButton = event.target.closest('.js-edit-exams');
+    if (editExamsButton) {
+      const registrationId = editExamsButton.getAttribute('data-registration-id');
+      if (!registrationId) return;
+      updateExams(registrationId);
       return;
     }
 

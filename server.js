@@ -4194,6 +4194,41 @@ function updateRegistrationStatus(db, registrationId, status, options = {}) {
   return Number(result.changes || 0);
 }
 
+function updateRegistrationExamSelections(db, registrationId, payload = {}) {
+  const safeRegistrationId = String(registrationId || '').trim();
+  if (!safeRegistrationId) return 0;
+
+  const wantsExamIaido = Boolean(payload.wantsExamIaido);
+  const wantsExamJodo = Boolean(payload.wantsExamJodo);
+  const targetGradeIaido = wantsExamIaido ? String(payload.targetGradeIaido || '').trim() : '';
+  const targetGradeJodo = wantsExamJodo ? String(payload.targetGradeJodo || '').trim() : '';
+  const wantsExamCombined = wantsExamIaido || wantsExamJodo;
+  const targetGradeCombined = targetGradeIaido || targetGradeJodo || '';
+
+  const update = db.prepare(`
+    UPDATE registrations
+    SET
+      wants_exam_iaido = ?,
+      target_grade_iaido = ?,
+      wants_exam_jodo = ?,
+      target_grade_jodo = ?,
+      wants_exam = ?,
+      target_grade = ?
+    WHERE id = ?
+  `);
+
+  const result = update.run(
+    wantsExamIaido ? 1 : 0,
+    targetGradeIaido,
+    wantsExamJodo ? 1 : 0,
+    targetGradeJodo,
+    wantsExamCombined ? 1 : 0,
+    targetGradeCombined,
+    safeRegistrationId
+  );
+  return Number(result.changes || 0);
+}
+
 function anonymizeRegistration(db, registrationId) {
   const anonymizedEmail = `anonymized-${registrationId}@example.invalid`;
   const update = db.prepare(`
@@ -6376,6 +6411,56 @@ function createServer(options = {}) {
           return;
         }
         sendJson(res, 400, { error: error.message || 'Invalid request' });
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/admin/registrations/update-exams') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      try {
+        const body = await parseJsonBody(req);
+        const registrationId = String(body?.registrationId || '').trim();
+        if (!registrationId) {
+          sendJson(res, 400, { error: 'registrationId is required.' });
+          return;
+        }
+
+        const registration = getRegistrationById(db, registrationId);
+        if (!registration) {
+          sendJson(res, 404, { error: 'Registration not found.' });
+          return;
+        }
+        if (registration.status === 'DELETED' || registration.status === 'ANONYMIZED') {
+          sendJson(res, 400, { error: `Cannot update exams for status: ${registration.status}.` });
+          return;
+        }
+
+        const changedRows = await runWithSqliteRetry(() => updateRegistrationExamSelections(db, registrationId, {
+          wantsExamIaido: body?.wantsExamIaido,
+          targetGradeIaido: body?.targetGradeIaido,
+          wantsExamJodo: body?.wantsExamJodo,
+          targetGradeJodo: body?.targetGradeJodo
+        }));
+        if (changedRows === 0) {
+          sendJson(res, 404, { error: 'Registration not found.' });
+          return;
+        }
+
+        const updatedRegistration = getRegistrationById(db, registrationId);
+        sendJson(res, 200, {
+          message: 'Exam selections updated.',
+          registration: updatedRegistration
+        });
+      } catch (error) {
+        if (isSqliteBusyError(error)) {
+          sendJson(res, 503, { error: 'Database is currently busy. Please try again in a few seconds.' });
+          return;
+        }
+        sendJson(res, 400, { error: error.message || 'Could not update exam selections.' });
       }
       return;
     }
