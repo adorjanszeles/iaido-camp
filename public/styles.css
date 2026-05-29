@@ -400,6 +400,7 @@ a {
 }
 
 .sensei-bio {
+  display: flow-root;
   color: var(--muted);
   line-height: 1.66;
 }
