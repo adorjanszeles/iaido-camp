@@ -1221,6 +1221,47 @@ async function getStripeCheckoutSession(sessionId) {
   return payload;
 }
 
+async function expireStripeCheckoutSession(sessionId) {
+  if (!isStripeEnabled()) {
+    throw createError(503, 'Stripe is not configured. Missing STRIPE_SECRET_KEY.');
+  }
+
+  const safeSessionId = String(sessionId || '').trim();
+  if (!safeSessionId) {
+    throw createError(400, 'Stripe session ID is required.');
+  }
+
+  const response = await fetch(
+    `${STRIPE_API_BASE_URL}/checkout/sessions/${encodeURIComponent(safeSessionId)}/expire`,
+    {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${STRIPE_SECRET_KEY}`
+      },
+      signal: AbortSignal.timeout(STRIPE_REQUEST_TIMEOUT_MS)
+    }
+  );
+
+  const raw = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    const stripeMessage = payload?.error?.message || raw || 'Stripe API request failed.';
+    throw createError(response.status >= 400 && response.status < 500 ? 400 : 502, `Stripe session expire failed: ${stripeMessage}`);
+  }
+
+  if (!payload || payload.object !== 'checkout.session') {
+    throw createError(502, 'Stripe session expire returned an unexpected payload.');
+  }
+
+  return payload;
+}
+
 function hasValidSmtpAuthConfig() {
   const hasUsername = SMTP_USERNAME.length > 0;
   const hasPassword = SMTP_PASSWORD.length > 0;
@@ -4287,6 +4328,36 @@ function hardDeleteRegistration(db, registrationId) {
   }
 }
 
+function deleteCateringOrder(db, cateringOrderId, options = {}) {
+  const safeCateringOrderId = String(cateringOrderId || '').trim();
+  if (!safeCateringOrderId) return 0;
+
+  const order = getCateringOrderById(db, safeCateringOrderId);
+  if (!order) return 0;
+  if (order.status === 'PAID') {
+    throw createError(400, 'Paid lunch orders cannot be deleted.');
+  }
+
+  const shouldDeleteTokens = options.deleteAccessTokens !== false;
+
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM catering_invoice_records WHERE catering_order_id = ?').run(safeCateringOrderId);
+
+    if (shouldDeleteTokens) {
+      db.prepare('DELETE FROM catering_access_tokens WHERE registration_id = ?').run(order.registrationId);
+    }
+
+    const result = db.prepare('DELETE FROM catering_orders WHERE id = ?').run(safeCateringOrderId);
+
+    db.exec('COMMIT');
+    return Number(result.changes || 0);
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -6720,6 +6791,83 @@ function createServer(options = {}) {
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/api/admin/catering-orders/delete') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      try {
+        const body = await parseJsonBody(req);
+        const cateringOrderId = String(body?.cateringOrderId || '').trim();
+        if (!cateringOrderId) {
+          sendJson(res, 400, { error: 'cateringOrderId is required.' });
+          return;
+        }
+
+        const order = getCateringOrderById(db, cateringOrderId);
+        if (!order) {
+          sendJson(res, 404, { error: 'Catering order not found.' });
+          return;
+        }
+        if (order.status === 'PAID') {
+          sendJson(res, 400, { error: 'Paid lunch orders cannot be deleted.' });
+          return;
+        }
+
+        const invoice = getCateringInvoiceRecordByOrderId(db, cateringOrderId);
+        if (invoice) {
+          sendJson(res, 400, { error: 'Lunch order cannot be deleted because an invoice record already exists.' });
+          return;
+        }
+
+        const checkoutSessionId = String(order.stripeCheckoutSessionId || '').trim();
+        if (checkoutSessionId) {
+          if (!isStripeEnabled()) {
+            sendJson(res, 503, { error: 'Stripe is not configured, so the existing lunch payment link cannot be safely expired.' });
+            return;
+          }
+
+          const session = await getStripeCheckoutSession(checkoutSessionId);
+          const stripePaymentStatus = String(session?.payment_status || '').trim().toLowerCase();
+          const stripeCheckoutStatus = String(session?.status || '').trim().toLowerCase();
+
+          if (stripePaymentStatus === 'paid') {
+            const eventCreatedAt = stripeUnixToIso(session?.created) || new Date().toISOString();
+            await runWithSqliteRetry(() => syncCateringOrderFromStripeSession(db, session, {
+              eventType: 'checkout.session.admin_delete_guard',
+              eventCreatedAt
+            }));
+            sendJson(res, 409, { error: 'Stripe already shows this lunch order as paid, so it cannot be deleted.' });
+            return;
+          }
+
+          if (stripeCheckoutStatus === 'open') {
+            await expireStripeCheckoutSession(checkoutSessionId);
+          } else if (stripeCheckoutStatus && stripeCheckoutStatus !== 'expired') {
+            sendJson(res, 409, { error: `Lunch order cannot be deleted because the Stripe session status is ${stripeCheckoutStatus}.` });
+            return;
+          }
+        }
+
+        const changedRows = await runWithSqliteRetry(() => deleteCateringOrder(db, cateringOrderId));
+        if (changedRows === 0) {
+          sendJson(res, 404, { error: 'Catering order not found.' });
+          return;
+        }
+
+        sendJson(res, 200, { message: 'Lunch order deleted.' });
+      } catch (error) {
+        if (isSqliteBusyError(error)) {
+          sendJson(res, 503, { error: 'Database is currently busy. Please try again in a few seconds.' });
+          return;
+        }
+        const statusCode = Number(error.statusCode) || 400;
+        sendJson(res, statusCode, { error: error.message || 'Could not delete lunch order.' });
+      }
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/admin/registrations/send-retry-payment-email') {
       if (!isAdminAuthenticated(req, db)) {
         sendJson(res, 401, { error: 'Admin login required.' });
@@ -7367,6 +7515,7 @@ module.exports = {
   updateRegistrationStatus,
   anonymizeRegistration,
   hardDeleteRegistration,
+  deleteCateringOrder,
   calculatePricing,
   PRICE_OPTIONS,
   PRIVACY_POLICY_VERSION,

@@ -566,6 +566,9 @@
         const retryEmailAction = isPendingPayment
           ? `<button class="btn secondary btn-small js-send-catering-retry-email" data-catering-order-id="${item.id}" type="button">Send payment link email</button>`
           : '<span class="helper">-</span>';
+        const deleteAction = isPendingPayment
+          ? `<button class="btn secondary btn-small js-delete-catering-order" data-catering-order-id="${item.id}" type="button">Delete lunch order</button>`
+          : '<span class="helper">-</span>';
         return `
           <tr>
             <td>${formatDateTime(item.createdAt)}</td>
@@ -574,7 +577,7 @@
             <td><span class="helper">${escapeHtml(formatCateringDays(item.cateringSelection))}</span></td>
             <td>${formatCurrency(Number(item.amount || 0), item.currency || 'EUR')}</td>
             <td>${escapeHtml(item.status || '-')}<br /><span class="helper">${escapeHtml(item.invoiceStatus || '-')}</span></td>
-            <td>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}</td>
+            <td>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${deleteAction}</td>
           </tr>
         `;
       })
@@ -1453,6 +1456,31 @@
     await loadData();
   }
 
+  async function deleteCateringOrder(cateringOrderId) {
+    const shouldProceed = window.confirm(
+      'Delete this unpaid lunch order? This will also revoke existing lunch access links for this registration and expire the stored Stripe checkout session.'
+    );
+    if (!shouldProceed) return;
+
+    const response = await fetch('/api/admin/catering-orders/delete', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ cateringOrderId })
+    });
+    const result = await readJsonResponseOrThrow(response);
+    if (response.status === 401) {
+      window.location.href = '/admin';
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to delete lunch order.');
+    }
+    window.alert(result.message || 'Lunch order deleted.');
+    await loadData();
+  }
+
   async function checkStripePayment(registrationId) {
     const response = await fetch('/api/admin/registrations/check-stripe-payment', {
       method: 'POST',
@@ -1944,6 +1972,16 @@
         const cateringOrderId = checkButton.getAttribute('data-catering-order-id');
         if (!cateringOrderId) return;
         checkCateringStripePayment(cateringOrderId).catch((error) => {
+          window.alert(error.message);
+        });
+        return;
+      }
+
+      const deleteButton = event.target.closest('.js-delete-catering-order');
+      if (deleteButton) {
+        const cateringOrderId = deleteButton.getAttribute('data-catering-order-id');
+        if (!cateringOrderId) return;
+        deleteCateringOrder(cateringOrderId).catch((error) => {
           window.alert(error.message);
         });
       }
