@@ -372,6 +372,29 @@
       </div>
     </div>
 
+    <div class="admin-modal-overlay" id="email-modal" hidden>
+      <div class="admin-modal-card" role="dialog" aria-modal="true" aria-labelledby="email-modal-title">
+        <div class="admin-modal-header">
+          <h2 id="email-modal-title">Update email</h2>
+          <button class="btn secondary btn-small" id="email-modal-close-btn" type="button">Close</button>
+        </div>
+        <p class="helper" id="email-modal-registration-meta"></p>
+        <form id="email-modal-form" novalidate>
+          <div class="form-grid">
+            <div class="field" style="grid-column: 1 / -1;">
+              <label for="email-modal-value">Email address</label>
+              <input id="email-modal-value" type="email" inputmode="email" autocomplete="off" maxlength="320" required />
+            </div>
+          </div>
+          <div id="email-modal-message" aria-live="polite"></div>
+          <div class="cta-row">
+            <button class="btn primary" id="email-modal-save-btn" type="submit">Save email</button>
+            <button class="btn secondary" id="email-modal-cancel-btn" type="button">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <script src="/js/admin.js?v=20260529-1" defer></script>
   </body>
 </html>

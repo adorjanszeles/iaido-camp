@@ -4270,6 +4270,31 @@ function updateRegistrationExamSelections(db, registrationId, payload = {}) {
   return Number(result.changes || 0);
 }
 
+function updateRegistrationEmail(db, registrationId, email) {
+  const safeRegistrationId = String(registrationId || '').trim();
+  if (!safeRegistrationId) return 0;
+
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!isValidEmail(normalizedEmail)) {
+    throw createError(400, 'A valid email address is required.');
+  }
+
+  const current = getRegistrationById(db, safeRegistrationId);
+  if (!current) return 0;
+  if (String(current.email || '').trim().toLowerCase() === normalizedEmail) {
+    return 1;
+  }
+
+  const update = db.prepare(`
+    UPDATE registrations
+    SET email = ?
+    WHERE id = ?
+  `);
+
+  const result = update.run(normalizedEmail, safeRegistrationId);
+  return Number(result.changes || 0);
+}
+
 function anonymizeRegistration(db, registrationId) {
   const anonymizedEmail = `anonymized-${registrationId}@example.invalid`;
   const update = db.prepare(`
@@ -6534,6 +6559,51 @@ function createServer(options = {}) {
           return;
         }
         sendJson(res, 400, { error: error.message || 'Could not update exam selections.' });
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/admin/registrations/update-email') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      try {
+        const body = await parseJsonBody(req);
+        const registrationId = String(body?.registrationId || '').trim();
+        if (!registrationId) {
+          sendJson(res, 400, { error: 'registrationId is required.' });
+          return;
+        }
+
+        const registration = getRegistrationById(db, registrationId);
+        if (!registration) {
+          sendJson(res, 404, { error: 'Registration not found.' });
+          return;
+        }
+        if (registration.status === 'DELETED' || registration.status === 'ANONYMIZED') {
+          sendJson(res, 400, { error: `Cannot update email for status: ${registration.status}.` });
+          return;
+        }
+
+        const changedRows = await runWithSqliteRetry(() => updateRegistrationEmail(db, registrationId, body?.email));
+        if (changedRows === 0) {
+          sendJson(res, 404, { error: 'Registration not found.' });
+          return;
+        }
+
+        const updatedRegistration = getRegistrationById(db, registrationId);
+        sendJson(res, 200, {
+          message: 'Email updated.',
+          registration: updatedRegistration
+        });
+      } catch (error) {
+        if (isSqliteBusyError(error)) {
+          sendJson(res, 503, { error: 'Database is currently busy. Please try again in a few seconds.' });
+          return;
+        }
+        sendJson(res, Number(error.statusCode) || 400, { error: error.message || 'Could not update email.' });
       }
       return;
     }

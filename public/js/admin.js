@@ -50,6 +50,14 @@
   const examModalCloseBtn = document.getElementById('exam-modal-close-btn');
   const examModalCancelBtn = document.getElementById('exam-modal-cancel-btn');
   const examModalSaveBtn = document.getElementById('exam-modal-save-btn');
+  const emailModalEl = document.getElementById('email-modal');
+  const emailModalFormEl = document.getElementById('email-modal-form');
+  const emailModalRegistrationMetaEl = document.getElementById('email-modal-registration-meta');
+  const emailModalValueEl = document.getElementById('email-modal-value');
+  const emailModalMessageEl = document.getElementById('email-modal-message');
+  const emailModalCloseBtn = document.getElementById('email-modal-close-btn');
+  const emailModalCancelBtn = document.getElementById('email-modal-cancel-btn');
+  const emailModalSaveBtn = document.getElementById('email-modal-save-btn');
   let allRegistrations = [];
   let allInvoices = [];
   let allCateringOrders = [];
@@ -62,6 +70,7 @@
   let currentEmailJob = null;
   let emailJobPollTimer = null;
   let examModalRegistrationId = '';
+  let emailModalRegistrationId = '';
 
   const examGradeOptions = ['', '6. kyu', '5. kyu', '4. kyu', '3. kyu', '2. kyu', '1. kyu', '1. dan', '2. dan', '3. dan', '4. dan', '5. dan', '6. dan', '7. dan', '8. dan'];
 
@@ -188,6 +197,17 @@
     examModalMessageEl.textContent = text;
   }
 
+  function setEmailModalMessage(type, text) {
+    if (!emailModalMessageEl) return;
+    if (!text) {
+      emailModalMessageEl.className = '';
+      emailModalMessageEl.textContent = '';
+      return;
+    }
+    emailModalMessageEl.className = `notice ${type}`;
+    emailModalMessageEl.textContent = text;
+  }
+
   function syncExamModalGradeState() {
     if (examModalIaidoGradeEl) {
       examModalIaidoGradeEl.disabled = !examModalIaidoEnabledEl?.checked;
@@ -243,6 +263,35 @@
     syncExamModalGradeState();
     if (examModalEl) {
       examModalEl.hidden = false;
+    }
+  }
+
+  function closeEmailModal() {
+    emailModalRegistrationId = '';
+    setEmailModalMessage('', '');
+    if (emailModalFormEl) {
+      emailModalFormEl.reset();
+    }
+    if (emailModalEl) {
+      emailModalEl.hidden = true;
+    }
+  }
+
+  function openEmailModal(registration) {
+    emailModalRegistrationId = registration.id;
+    if (emailModalRegistrationMetaEl) {
+      emailModalRegistrationMetaEl.textContent = `${registration.fullName} (${registration.email})`;
+    }
+    if (emailModalValueEl) {
+      emailModalValueEl.value = String(registration.email || '');
+    }
+    setEmailModalMessage('', '');
+    if (emailModalEl) {
+      emailModalEl.hidden = false;
+    }
+    if (emailModalValueEl) {
+      emailModalValueEl.focus();
+      emailModalValueEl.select();
     }
   }
 
@@ -362,6 +411,9 @@
         const retryEmailAction = isDeleted || isAnonymized || isPaid
           ? '<span class="helper">-</span>'
           : `<button class="btn secondary btn-small js-send-retry-email" data-registration-id="${item.id}" type="button">Send payment link email</button>`;
+        const emailEditAction = isDeleted || isAnonymized
+          ? '<span class="helper">-</span>'
+          : `<button class="btn secondary btn-small js-edit-email" data-registration-id="${item.id}" type="button">Update email</button>`;
         const examEditAction = isDeleted || isAnonymized
           ? '<span class="helper">-</span>'
           : `<button class="btn secondary btn-small js-edit-exams" data-registration-id="${item.id}" type="button">Update exams</button>`;
@@ -369,7 +421,7 @@
           ? `<button class="btn secondary btn-small js-send-catering-invite" data-registration-id="${item.id}" type="button">Send lunch invite</button>`
           : '<span class="helper">-</span>';
         const detailsToggle = `<button class="btn secondary btn-small js-toggle-details" data-registration-id="${item.id}" aria-expanded="false" type="button">Show details</button>`;
-        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${examEditAction}<div style="height:0.35rem"></div>${cateringInviteAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}<div style="height:0.35rem"></div>${hardDeleteAction}`;
+        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${emailEditAction}<div style="height:0.35rem"></div>${examEditAction}<div style="height:0.35rem"></div>${cateringInviteAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}<div style="height:0.35rem"></div>${hardDeleteAction}`;
         const detailRow = `
           <tr class="registration-details-row" data-details-row="${item.id}" hidden>
             <td colspan="7">
@@ -1180,6 +1232,15 @@
     openExamModal(registration);
   }
 
+  async function updateEmail(registrationId) {
+    const registration = allRegistrations.find((item) => item.id === registrationId);
+    if (!registration) {
+      window.alert('Registration not found in the current admin view.');
+      return;
+    }
+    openEmailModal(registration);
+  }
+
   async function logout() {
     try {
       await fetch('/api/admin/logout', { method: 'POST' });
@@ -1811,6 +1872,73 @@
     });
   }
 
+  if (emailModalCloseBtn) {
+    emailModalCloseBtn.addEventListener('click', closeEmailModal);
+  }
+
+  if (emailModalCancelBtn) {
+    emailModalCancelBtn.addEventListener('click', closeEmailModal);
+  }
+
+  if (emailModalEl) {
+    emailModalEl.addEventListener('click', (event) => {
+      if (event.target === emailModalEl) {
+        closeEmailModal();
+      }
+    });
+  }
+
+  if (emailModalFormEl) {
+    emailModalFormEl.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!emailModalRegistrationId) return;
+
+      const email = String(emailModalValueEl?.value || '').trim().toLowerCase();
+      if (!email) {
+        setEmailModalMessage('error', 'Enter an email address.');
+        return;
+      }
+
+      if (emailModalSaveBtn) {
+        emailModalSaveBtn.disabled = true;
+        emailModalSaveBtn.textContent = 'Saving...';
+      }
+      setEmailModalMessage('', '');
+
+      try {
+        const response = await fetch('/api/admin/registrations/update-email', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            registrationId: emailModalRegistrationId,
+            email
+          })
+        });
+
+        const result = await readJsonResponseOrThrow(response);
+        if (response.status === 401) {
+          window.location.href = '/admin';
+          return;
+        }
+        if (!response.ok) {
+          throw new Error(result.error || 'Failed to update email.');
+        }
+
+        closeEmailModal();
+        await loadData();
+      } catch (error) {
+        setEmailModalMessage('error', error.message);
+      } finally {
+        if (emailModalSaveBtn) {
+          emailModalSaveBtn.disabled = false;
+          emailModalSaveBtn.textContent = 'Save email';
+        }
+      }
+    });
+  }
+
   if (emailRecipientModeEl) {
     emailRecipientModeEl.addEventListener('change', () => {
       setEmailSelectionControlsState();
@@ -1896,6 +2024,14 @@
       const registrationId = editExamsButton.getAttribute('data-registration-id');
       if (!registrationId) return;
       updateExams(registrationId);
+      return;
+    }
+
+    const editEmailButton = event.target.closest('.js-edit-email');
+    if (editEmailButton) {
+      const registrationId = editEmailButton.getAttribute('data-registration-id');
+      if (!registrationId) return;
+      updateEmail(registrationId);
       return;
     }
 
