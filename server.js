@@ -5762,6 +5762,7 @@ function getStaticFilePath(urlPath) {
   const routeMap = {
     '/': 'index.html',
     '/program': 'program.html',
+    '/exam': 'exam.html',
     '/faq': 'faq.html',
     '/info': 'info.html',
     '/senseis': 'senseis-oshita.html',
