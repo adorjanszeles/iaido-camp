@@ -5771,6 +5771,7 @@ function getStaticFilePath(urlPath) {
     '/senseis/takizawa': 'senseis-takizawa.html',
     '/senseis/kotaro': 'senseis-kotaro-ishido.html',
     '/senseis/morishima': 'senseis-morishima.html',
+    '/senseis/inari': 'senseis-inari.html',
     '/payment-success': 'payment-success.html',
     '/payment-cancel': 'payment-cancel.html',
     '/catering-registration': 'catering-registration.html',
