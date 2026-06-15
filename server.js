@@ -5761,6 +5761,7 @@ function getStats(registrations, cateringOrders = []) {
 function getStaticFilePath(urlPath) {
   const routeMap = {
     '/': 'index.html',
+    '/news': 'news.html',
     '/program': 'program.html',
     '/exam': 'exam.html',
     '/faq': 'faq.html',
