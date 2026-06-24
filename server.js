@@ -7070,6 +7070,30 @@ function createServer(options = {}) {
           return;
         }
 
+        const checkoutSessionId = String(registration.stripeCheckoutSessionId || '').trim();
+        if (checkoutSessionId) {
+          if (!isStripeEnabled()) {
+            sendJson(res, 503, { error: 'Stripe is not configured, so the existing payment session cannot be safely expired before hard delete.' });
+            return;
+          }
+
+          const session = await getStripeCheckoutSession(checkoutSessionId);
+          const stripePaymentStatus = String(session?.payment_status || '').trim().toLowerCase();
+          const stripeCheckoutStatus = String(session?.status || '').trim().toLowerCase();
+
+          if (stripePaymentStatus === 'paid') {
+            sendJson(res, 409, { error: 'Stripe already shows this registration as paid, so hard delete is blocked. Please review and refund before deleting.' });
+            return;
+          }
+
+          if (stripeCheckoutStatus === 'open') {
+            await expireStripeCheckoutSession(checkoutSessionId);
+          } else if (stripeCheckoutStatus && stripeCheckoutStatus !== 'expired') {
+            sendJson(res, 409, { error: `Hard delete is blocked because the Stripe session status is ${stripeCheckoutStatus}.` });
+            return;
+          }
+        }
+
         const changedRows = await runWithSqliteRetry(() => hardDeleteRegistration(db, registrationId));
         if (changedRows === 0) {
           sendJson(res, 404, { error: 'Registration not found.' });
@@ -7077,6 +7101,49 @@ function createServer(options = {}) {
         }
 
         sendJson(res, 200, { message: 'Registration was permanently deleted.' });
+      } catch (error) {
+        if (isSqliteBusyError(error)) {
+          sendJson(res, 503, { error: 'Database is currently busy. Please try again in a few seconds.' });
+          return;
+        }
+        sendJson(res, 400, { error: error.message || 'Invalid request' });
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/admin/registrations/force-hard-delete') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      try {
+        const body = await parseJsonBody(req);
+        const registrationId = String(body.registrationId || '').trim();
+
+        if (!registrationId) {
+          sendJson(res, 400, { error: 'registrationId is required.' });
+          return;
+        }
+
+        const registration = getRegistrationById(db, registrationId);
+        if (!registration) {
+          sendJson(res, 404, { error: 'Registration not found.' });
+          return;
+        }
+
+        if (registration.status !== 'DELETED' && registration.status !== 'ANONYMIZED') {
+          sendJson(res, 400, { error: 'Force hard delete is only allowed for DELETED or ANONYMIZED registrations.' });
+          return;
+        }
+
+        const changedRows = await runWithSqliteRetry(() => hardDeleteRegistration(db, registrationId));
+        if (changedRows === 0) {
+          sendJson(res, 404, { error: 'Registration not found.' });
+          return;
+        }
+
+        sendJson(res, 200, { message: 'Registration was permanently deleted with force hard delete.' });
       } catch (error) {
         if (isSqliteBusyError(error)) {
           sendJson(res, 503, { error: 'Database is currently busy. Please try again in a few seconds.' });

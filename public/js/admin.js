@@ -403,7 +403,10 @@
           ? '<span class="helper">Anonymized</span>'
           : `<button class="btn secondary btn-small js-anonymize" data-registration-id="${item.id}" type="button">GDPR anonymize</button>`;
         const hardDeleteAction = canHardDelete
-          ? `<button class="btn danger btn-small js-hard-delete" data-registration-id="${item.id}" type="button">Hard delete (permanent)</button>`
+          ? `<button class="btn danger btn-small js-hard-delete" data-registration-id="${item.id}" type="button">Hard delete (safe)</button>`
+          : '<span class="helper">-</span>';
+        const forceHardDeleteAction = canHardDelete
+          ? `<button class="btn danger btn-small js-force-hard-delete" data-registration-id="${item.id}" type="button">Force hard delete</button>`
           : '<span class="helper">-</span>';
         const stripeCheckAction = isPendingPayment
           ? `<button class="btn secondary btn-small js-check-stripe-payment" data-registration-id="${item.id}" type="button">Check Stripe payment</button>`
@@ -421,7 +424,7 @@
           ? `<button class="btn secondary btn-small js-send-catering-invite" data-registration-id="${item.id}" type="button">Send lunch invite</button>`
           : '<span class="helper">-</span>';
         const detailsToggle = `<button class="btn secondary btn-small js-toggle-details" data-registration-id="${item.id}" aria-expanded="false" type="button">Show details</button>`;
-        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${emailEditAction}<div style="height:0.35rem"></div>${examEditAction}<div style="height:0.35rem"></div>${cateringInviteAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}<div style="height:0.35rem"></div>${hardDeleteAction}`;
+        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${emailEditAction}<div style="height:0.35rem"></div>${examEditAction}<div style="height:0.35rem"></div>${cateringInviteAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}<div style="height:0.35rem"></div>${hardDeleteAction}<div style="height:0.35rem"></div>${forceHardDeleteAction}`;
         const detailRow = `
           <tr class="registration-details-row" data-details-row="${item.id}" hidden>
             <td colspan="7">
@@ -1215,6 +1218,42 @@
 
       if (!response.ok) {
         throw new Error(result.error || 'Failed to permanently delete registration.');
+      }
+
+      await loadData();
+    } catch (error) {
+      window.alert(error.message);
+    }
+  }
+
+  async function forceHardDelete(registrationId) {
+    const shouldProceed = window.confirm(
+      'Force hard delete bypasses the Stripe safety checks. Use this only if you have already handled any payment/refund consequences manually. Continue?'
+    );
+    if (!shouldProceed) return;
+
+    const secondConfirmation = window.confirm(
+      'Final confirmation: permanently delete this registration even if an old Stripe session might still exist? This cannot be undone.'
+    );
+    if (!secondConfirmation) return;
+
+    try {
+      const response = await fetch('/api/admin/registrations/force-hard-delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ registrationId })
+      });
+
+      const result = await readJsonResponseOrThrow(response);
+      if (response.status === 401) {
+        window.location.href = '/admin';
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to force hard delete registration.');
       }
 
       await loadData();
@@ -2070,6 +2109,14 @@
       const registrationId = hardDeleteButton.getAttribute('data-registration-id');
       if (!registrationId) return;
       hardDelete(registrationId);
+      return;
+    }
+
+    const forceHardDeleteButton = event.target.closest('.js-force-hard-delete');
+    if (forceHardDeleteButton) {
+      const registrationId = forceHardDeleteButton.getAttribute('data-registration-id');
+      if (!registrationId) return;
+      forceHardDelete(registrationId);
     }
   });
 
