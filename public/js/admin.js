@@ -39,6 +39,13 @@
   const cateringInviteMetaEl = document.getElementById('catering-invite-meta');
   const sendAllCateringInvitesBtn = document.getElementById('send-all-catering-invites-btn');
   const exportCateringCsvBtn = document.getElementById('export-catering-csv-btn');
+  const sayonaraOrderRowsEl = document.getElementById('sayonara-order-rows');
+  const sayonaraOrderSearchEl = document.getElementById('sayonara-order-search');
+  const sayonaraOrderStatusFilterEl = document.getElementById('sayonara-order-status-filter');
+  const sayonaraOrderSearchMetaEl = document.getElementById('sayonara-order-search-meta');
+  const sayonaraInviteMetaEl = document.getElementById('sayonara-invite-meta');
+  const sendAllSayonaraInvitesBtn = document.getElementById('send-all-sayonara-invites-btn');
+  const exportSayonaraCsvBtn = document.getElementById('export-sayonara-csv-btn');
   const examModalEl = document.getElementById('exam-modal');
   const examModalFormEl = document.getElementById('exam-modal-form');
   const examModalRegistrationMetaEl = document.getElementById('exam-modal-registration-meta');
@@ -61,6 +68,7 @@
   let allRegistrations = [];
   let allInvoices = [];
   let allCateringOrders = [];
+  let allSayonaraOrders = [];
   let emailTemplates = [];
   let emailCapabilities = {
     provider: 'disabled',
@@ -337,6 +345,9 @@
         ${renderDetailField('Lunch days', formatCateringDays(item.cateringSelection))}
         ${renderDetailField('Lunch day count', String(item.cateringDaysCount || 0))}
         ${renderDetailField('Lunch amount', formatCurrency(Number(item.cateringAmount || 0), item.currency || 'EUR'))}
+        ${renderDetailField('Sayonara Party', item.sayonaraAttending ? 'Yes' : 'No')}
+        ${renderDetailField('Sayonara coupon packages', String(item.sayonaraSpiritsPackageCount || 0))}
+        ${renderDetailField('Sayonara amount', formatCurrency(Number(item.sayonaraAmount || 0), item.currency || 'EUR'))}
 
         ${renderDetailField('Full name', item.fullName)}
         ${renderDetailField('Email', item.email)}
@@ -370,6 +381,10 @@
         <div class="registration-detail-label">Note</div>
         <div class="registration-note-value">${escapeHtml(item.foodNotes || '-')}</div>
       </div>
+      <div class="registration-note-block">
+        <div class="registration-detail-label">Sayonara dietary note</div>
+        <div class="registration-note-value">${escapeHtml(item.sayonaraFoodNotes || '-')}</div>
+      </div>
     `;
   }
 
@@ -394,6 +409,8 @@
         const isPendingPayment = normalizedStatus === 'PENDING_PAYMENT';
         const hasMainLunchSelection = Number(item.cateringDaysCount || 0) > 0;
         const hasSeparateCateringOrder = Boolean(item.hasCateringOrder);
+        const hasMainSayonaraSelection = Boolean(item.sayonaraAttending);
+        const hasSeparateSayonaraOrder = Boolean(item.hasSayonaraOrder);
         const canHardDelete = isDeleted || isAnonymized;
         const amount = Number(item.amount ?? item.amountHuf ?? 0);
         const deleteAction = isDeleted || isAnonymized
@@ -423,8 +440,11 @@
         const cateringInviteAction = isPaid && !hasMainLunchSelection && !hasSeparateCateringOrder
           ? `<button class="btn secondary btn-small js-send-catering-invite" data-registration-id="${item.id}" type="button">Send lunch invite</button>`
           : '<span class="helper">-</span>';
+        const sayonaraInviteAction = isPaid && !hasMainSayonaraSelection && !hasSeparateSayonaraOrder
+          ? `<button class="btn secondary btn-small js-send-sayonara-invite" data-registration-id="${item.id}" type="button">Send Sayonara invite</button>`
+          : '<span class="helper">-</span>';
         const detailsToggle = `<button class="btn secondary btn-small js-toggle-details" data-registration-id="${item.id}" aria-expanded="false" type="button">Show details</button>`;
-        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${emailEditAction}<div style="height:0.35rem"></div>${examEditAction}<div style="height:0.35rem"></div>${cateringInviteAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}<div style="height:0.35rem"></div>${hardDeleteAction}<div style="height:0.35rem"></div>${forceHardDeleteAction}`;
+        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${emailEditAction}<div style="height:0.35rem"></div>${examEditAction}<div style="height:0.35rem"></div>${cateringInviteAction}<div style="height:0.35rem"></div>${sayonaraInviteAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}<div style="height:0.35rem"></div>${hardDeleteAction}<div style="height:0.35rem"></div>${forceHardDeleteAction}`;
         const detailRow = `
           <tr class="registration-details-row" data-details-row="${item.id}" hidden>
             <td colspan="7">
@@ -479,7 +499,9 @@
         const invoiceId = String(item.id || '');
         const status = String(item.status || '-');
         const entityType = String(item.entityType || 'registration').trim();
-        const entityLabel = entityType === 'catering_order' ? 'Catering' : 'Registration';
+        const entityLabel = entityType === 'catering_order'
+          ? 'Catering'
+          : (entityType === 'sayonara_order' ? 'Sayonara' : 'Registration');
         const registrationId = String(item.registrationId || '');
         const person = String(item.registrationFullName || '').trim();
         const email = String(item.registrationEmail || '').trim();
@@ -728,6 +750,98 @@
     sendAllCateringInvitesBtn.textContent = 'Send lunch invites to all eligible paid registrations';
   }
 
+  function updateSayonaraOrderSearchMeta(visibleCount, totalCount, query, statusFilter) {
+    if (!sayonaraOrderSearchMetaEl) return;
+    if (!query && !statusFilter) {
+      sayonaraOrderSearchMetaEl.textContent = `Showing ${totalCount} Sayonara orders.`;
+      return;
+    }
+    const parts = [];
+    if (query) parts.push(`query "${query}"`);
+    if (statusFilter) parts.push(`status "${statusFilter}"`);
+    sayonaraOrderSearchMetaEl.textContent = `Showing ${visibleCount} of ${totalCount} Sayonara orders for ${parts.join(' and ')}.`;
+  }
+
+  function renderSayonaraOrderRows(orders, options = {}) {
+    if (!sayonaraOrderRowsEl) return;
+    const hasFilter = Boolean(options.hasFilter);
+    if (!orders.length) {
+      sayonaraOrderRowsEl.innerHTML = hasFilter
+        ? '<tr><td colspan="7">No matching Sayonara orders.</td></tr>'
+        : '<tr><td colspan="7">No Sayonara orders yet.</td></tr>';
+      return;
+    }
+
+    sayonaraOrderRowsEl.innerHTML = orders
+      .slice()
+      .reverse()
+      .map((item) => {
+        const isPendingPayment = String(item.status || '').trim().toUpperCase() === 'PENDING_PAYMENT';
+        const stripeCheckAction = isPendingPayment
+          ? `<button class="btn secondary btn-small js-check-sayonara-stripe-payment" data-sayonara-order-id="${item.id}" type="button">Check Stripe payment</button>`
+          : '<span class="helper">-</span>';
+        const retryEmailAction = isPendingPayment
+          ? `<button class="btn secondary btn-small js-send-sayonara-retry-email" data-sayonara-order-id="${item.id}" type="button">Send payment link email</button>`
+          : '<span class="helper">-</span>';
+        const deleteAction = isPendingPayment
+          ? `<button class="btn secondary btn-small js-delete-sayonara-order" data-sayonara-order-id="${item.id}" type="button">Delete Sayonara order</button>`
+          : '<span class="helper">-</span>';
+        return `
+          <tr>
+            <td>${formatDateTime(item.createdAt)}</td>
+            <td>${escapeHtml(item.id || '-')}</td>
+            <td>${escapeHtml(item.registrationFullName || '-')}<br /><span class="helper">${escapeHtml(item.registrationEmail || '-')}</span></td>
+            <td>${escapeHtml(item.status || '-')}<br /><span class="helper">${escapeHtml(item.invoiceStatus || '-')}</span></td>
+            <td><span class="helper">Packages: ${escapeHtml(String(item.spiritsPackageCount || 0))}</span></td>
+            <td>${formatCurrency(Number(item.amount || 0), item.currency || 'EUR')}</td>
+            <td>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${deleteAction}</td>
+          </tr>
+        `;
+      })
+      .join('');
+  }
+
+  function filterSayonaraOrders() {
+    const query = String(sayonaraOrderSearchEl?.value || '').trim().toLowerCase();
+    const statusFilter = String(sayonaraOrderStatusFilterEl?.value || '').trim();
+    const filtered = allSayonaraOrders.filter((item) => {
+      const fullName = String(item.registrationFullName || '').toLowerCase();
+      const email = String(item.registrationEmail || '').toLowerCase();
+      const status = String(item.status || '').trim();
+      const matchesQuery = !query || fullName.includes(query) || email.includes(query);
+      const matchesStatus = !statusFilter || status === statusFilter;
+      return matchesQuery && matchesStatus;
+    });
+
+    renderSayonaraOrderRows(filtered, { hasFilter: Boolean(query) || Boolean(statusFilter) });
+    updateSayonaraOrderSearchMeta(filtered.length, allSayonaraOrders.length, String(sayonaraOrderSearchEl?.value || '').trim(), statusFilter);
+  }
+
+  function getEligibleSayonaraInviteRecipients() {
+    return allRegistrations.filter((item) => {
+      const status = String(item.status || '').trim();
+      const email = String(item.email || '').trim();
+      const hasMainSayonaraSelection = Boolean(item.sayonaraAttending);
+      const hasSeparateSayonaraOrder = Boolean(item.hasSayonaraOrder);
+      return status === 'PAID' && email.length > 0 && !hasMainSayonaraSelection && !hasSeparateSayonaraOrder;
+    });
+  }
+
+  function updateSayonaraInviteControls() {
+    const eligibleCount = getEligibleSayonaraInviteRecipients().length;
+    if (sayonaraInviteMetaEl) {
+      sayonaraInviteMetaEl.textContent = `Eligible paid registrations for Sayonara invite: ${eligibleCount}.`;
+    }
+    if (!sendAllSayonaraInvitesBtn) return;
+    if (isEmailJobRunning()) {
+      sendAllSayonaraInvitesBtn.disabled = true;
+      sendAllSayonaraInvitesBtn.textContent = 'Email job running...';
+      return;
+    }
+    sendAllSayonaraInvitesBtn.disabled = eligibleCount === 0;
+    sendAllSayonaraInvitesBtn.textContent = 'Send Sayonara invites to all eligible paid registrations';
+  }
+
   function stopEmailJobPolling() {
     if (!emailJobPollTimer) return;
     window.clearInterval(emailJobPollTimer);
@@ -796,6 +910,7 @@
     renderEmailJobStatus(currentEmailJob, deliveries);
     updateSendEmailButtonState();
     updateCateringInviteControls();
+    updateSayonaraInviteControls();
 
     if (isEmailJobRunning(currentEmailJob)) {
       if (emailCapabilities.provider !== 'disabled') {
@@ -1048,14 +1163,15 @@
 
   async function loadData() {
     try {
-      const [statsRes, regsRes, pricingRes, emailTemplateRes, invoicesRes, emailJobRes, cateringOrdersRes] = await Promise.all([
+      const [statsRes, regsRes, pricingRes, emailTemplateRes, invoicesRes, emailJobRes, cateringOrdersRes, sayonaraOrdersRes] = await Promise.all([
         fetch('/api/stats'),
         fetch('/api/registrations'),
         fetch('/api/admin/pricing'),
         fetch('/api/admin/email/templates'),
         fetch('/api/admin/invoices?limit=500'),
         fetch('/api/admin/email/job'),
-        fetch('/api/admin/catering-orders')
+        fetch('/api/admin/catering-orders'),
+        fetch('/api/admin/sayonara-orders')
       ]);
 
       if (
@@ -1065,7 +1181,8 @@
         emailTemplateRes.status === 401 ||
         invoicesRes.status === 401 ||
         emailJobRes.status === 401 ||
-        cateringOrdersRes.status === 401
+        cateringOrdersRes.status === 401 ||
+        sayonaraOrdersRes.status === 401
       ) {
         window.location.href = '/admin';
         return;
@@ -1078,8 +1195,9 @@
       const invoicesData = await invoicesRes.json();
       const emailJobData = await readJsonResponseOrThrow(emailJobRes);
       const cateringOrdersData = await cateringOrdersRes.json();
+      const sayonaraOrdersData = await sayonaraOrdersRes.json();
 
-      if (!statsRes.ok || !regsRes.ok || !pricingRes.ok || !emailTemplateRes.ok || !invoicesRes.ok || !emailJobRes.ok || !cateringOrdersRes.ok) {
+      if (!statsRes.ok || !regsRes.ok || !pricingRes.ok || !emailTemplateRes.ok || !invoicesRes.ok || !emailJobRes.ok || !cateringOrdersRes.ok || !sayonaraOrdersRes.ok) {
         throw new Error('API error while loading admin data.');
       }
 
@@ -1103,6 +1221,9 @@
       allCateringOrders = Array.isArray(cateringOrdersData.orders) ? cateringOrdersData.orders : [];
       filterCateringOrders();
       updateCateringInviteControls();
+      allSayonaraOrders = Array.isArray(sayonaraOrdersData.orders) ? sayonaraOrdersData.orders : [];
+      filterSayonaraOrders();
+      updateSayonaraInviteControls();
       applyEmailJobState(emailJobData.job || null, Array.isArray(emailJobData.deliveries) ? emailJobData.deliveries : []);
 
       if (emailCapabilities.provider === 'disabled') {
@@ -1115,10 +1236,13 @@
       allRegistrations = [];
       allInvoices = [];
       allCateringOrders = [];
+      allSayonaraOrders = [];
       updateSearchMeta(0, 0, '', '');
       updateInvoiceSearchMeta(0, 0, '');
       updateCateringOrderSearchMeta(0, 0, '', '');
       updateCateringInviteControls();
+      updateSayonaraOrderSearchMeta(0, 0, '', '');
+      updateSayonaraInviteControls();
       showPricingMessage('error', 'Failed to load pricing settings.');
       if (emailRecipientRowsEl) {
         emailRecipientRowsEl.innerHTML = '<tr><td colspan="4">Failed to load recipients.</td></tr>';
@@ -1128,6 +1252,9 @@
       }
       if (cateringOrderRowsEl) {
         cateringOrderRowsEl.innerHTML = '<tr><td colspan="7">Failed to load catering orders.</td></tr>';
+      }
+      if (sayonaraOrderRowsEl) {
+        sayonaraOrderRowsEl.innerHTML = '<tr><td colspan="7">Failed to load Sayonara orders.</td></tr>';
       }
       showEmailMessage('error', 'Failed to load email sender data.');
       if (emailJobStatusEl) {
@@ -1473,6 +1600,75 @@
     }
   }
 
+  async function sendSayonaraInviteEmail(registrationId) {
+    const response = await fetch('/api/admin/registrations/send-sayonara-invite-email', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ registrationId })
+    });
+    const result = await readJsonResponseOrThrow(response);
+    if (response.status === 401) {
+      window.location.href = '/admin';
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to send Sayonara invitation email.');
+    }
+    window.alert(result.message || 'Sayonara invitation email sent.');
+  }
+
+  async function sendAllSayonaraInvites() {
+    if (isEmailJobRunning()) {
+      showEmailMessage('error', 'Another email job is already running.');
+      return;
+    }
+    const eligibleCount = getEligibleSayonaraInviteRecipients().length;
+    if (eligibleCount === 0) {
+      showEmailMessage('error', 'There are no eligible paid registrations for Sayonara invite emails.');
+      return;
+    }
+
+    const shouldProceed = window.confirm(`Send Sayonara invite emails to ${eligibleCount} eligible paid registration(s)?`);
+    if (!shouldProceed) return;
+
+    showEmailMessage('ok', 'Starting Sayonara invitation email job...');
+    updateSayonaraInviteControls();
+
+    try {
+      const response = await fetch('/api/admin/sayonara/send-invites-to-paid', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      if (response.status === 401) {
+        window.location.href = '/admin';
+        return;
+      }
+
+      const result = await readJsonResponseOrThrow(response);
+
+      if (response.status === 409) {
+        applyEmailJobState(result.job || null, Array.isArray(result.deliveries) ? result.deliveries : []);
+        throw new Error(result.error || 'Another email job is already running.');
+      }
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to start Sayonara invitation email job.');
+      }
+
+      applyEmailJobState(result.job || null, Array.isArray(result.deliveries) ? result.deliveries : []);
+      showEmailMessage('ok', result.message || 'Sayonara invitation email job started successfully.');
+      await loadData();
+    } catch (error) {
+      showEmailMessage('error', error.message);
+    } finally {
+      updateSayonaraInviteControls();
+    }
+  }
+
   async function exportCateringCsv() {
     if (exportCateringCsvBtn) {
       exportCateringCsvBtn.disabled = true;
@@ -1505,6 +1701,42 @@
       if (exportCateringCsvBtn) {
         exportCateringCsvBtn.disabled = false;
         exportCateringCsvBtn.textContent = 'Export Catering CSV';
+      }
+    }
+  }
+
+  async function exportSayonaraCsv() {
+    if (exportSayonaraCsvBtn) {
+      exportSayonaraCsvBtn.disabled = true;
+      exportSayonaraCsvBtn.textContent = 'Exporting...';
+    }
+    try {
+      const response = await fetch('/api/admin/sayonara-orders/export.csv');
+      if (response.status === 401) {
+        window.location.href = '/admin';
+        return;
+      }
+      if (!response.ok) {
+        throw new Error('Sayonara CSV export failed.');
+      }
+      const blob = await response.blob();
+      const contentDisposition = response.headers.get('Content-Disposition') || '';
+      const match = contentDisposition.match(/filename=\"?([^\";]+)\"?/i);
+      const fileName = match && match[1] ? match[1] : 'all-sayonara.csv';
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      window.alert(error.message);
+    } finally {
+      if (exportSayonaraCsvBtn) {
+        exportSayonaraCsvBtn.disabled = false;
+        exportSayonaraCsvBtn.textContent = 'Export Sayonara CSV';
       }
     }
   }
@@ -1578,6 +1810,78 @@
       throw new Error(result.error || 'Failed to delete lunch order.');
     }
     window.alert(result.message || 'Lunch order deleted.');
+    await loadData();
+  }
+
+  async function sendSayonaraRetryPaymentEmail(sayonaraOrderId) {
+    const response = await fetch('/api/admin/sayonara-orders/send-retry-payment-email', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ sayonaraOrderId })
+    });
+    const result = await readJsonResponseOrThrow(response);
+    if (response.status === 401) {
+      window.location.href = '/admin';
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to generate Sayonara retry payment link.');
+    }
+    window.alert(result.message || 'Sayonara payment link email sent.');
+  }
+
+  async function checkSayonaraStripePayment(sayonaraOrderId) {
+    const response = await fetch('/api/admin/sayonara-orders/check-stripe-payment', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ sayonaraOrderId })
+    });
+    const result = await readJsonResponseOrThrow(response);
+    if (response.status === 401) {
+      window.location.href = '/admin';
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(result.error || 'Stripe Sayonara payment check failed.');
+    }
+    const lines = [
+      result.message || 'Stripe payment check completed.',
+      `Sayonara order ID: ${result.sayonaraOrderId || sayonaraOrderId}`,
+      `Order status: ${result.sayonaraOrderStatus || '-'}`,
+      `Stripe payment status: ${result?.stripe?.paymentStatus || '-'}`,
+      `Stripe checkout status: ${result?.stripe?.checkoutStatus || '-'}`,
+      `Stripe session: ${result?.stripe?.sessionId || '-'}`
+    ];
+    window.alert(lines.join('\n'));
+    await loadData();
+  }
+
+  async function deleteSayonaraOrder(sayonaraOrderId) {
+    const shouldProceed = window.confirm(
+      'Delete this unpaid Sayonara order? This will also revoke existing Sayonara access links for this registration and expire the stored Stripe checkout session.'
+    );
+    if (!shouldProceed) return;
+
+    const response = await fetch('/api/admin/sayonara-orders/delete', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ sayonaraOrderId })
+    });
+    const result = await readJsonResponseOrThrow(response);
+    if (response.status === 401) {
+      window.location.href = '/admin';
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to delete Sayonara order.');
+    }
+    window.alert(result.message || 'Sayonara order deleted.');
     await loadData();
   }
 
@@ -1802,6 +2106,14 @@
     cateringOrderStatusFilterEl.addEventListener('change', filterCateringOrders);
   }
 
+  if (sayonaraOrderSearchEl) {
+    sayonaraOrderSearchEl.addEventListener('input', filterSayonaraOrders);
+  }
+
+  if (sayonaraOrderStatusFilterEl) {
+    sayonaraOrderStatusFilterEl.addEventListener('change', filterSayonaraOrders);
+  }
+
   if (invoiceSearchEl) {
     invoiceSearchEl.addEventListener('input', filterInvoices);
   }
@@ -1818,6 +2130,19 @@
       sendAllCateringInvites().catch((error) => {
         showEmailMessage('error', error.message);
         updateCateringInviteControls();
+      });
+    });
+  }
+
+  if (exportSayonaraCsvBtn) {
+    exportSayonaraCsvBtn.addEventListener('click', exportSayonaraCsv);
+  }
+
+  if (sendAllSayonaraInvitesBtn) {
+    sendAllSayonaraInvitesBtn.addEventListener('click', () => {
+      sendAllSayonaraInvites().catch((error) => {
+        showEmailMessage('error', error.message);
+        updateSayonaraInviteControls();
       });
     });
   }
@@ -2086,6 +2411,18 @@
       return;
     }
 
+    const sayonaraInviteButton = event.target.closest('.js-send-sayonara-invite');
+    if (sayonaraInviteButton) {
+      const registrationId = sayonaraInviteButton.getAttribute('data-registration-id');
+      if (!registrationId) return;
+      sendSayonaraInviteEmail(registrationId)
+        .then(() => loadData())
+        .catch((error) => {
+          window.alert(error.message);
+        });
+      return;
+    }
+
     const checkStripeButton = event.target.closest('.js-check-stripe-payment');
     if (checkStripeButton) {
       const registrationId = checkStripeButton.getAttribute('data-registration-id');
@@ -2165,6 +2502,39 @@
         const cateringOrderId = deleteButton.getAttribute('data-catering-order-id');
         if (!cateringOrderId) return;
         deleteCateringOrder(cateringOrderId).catch((error) => {
+          window.alert(error.message);
+        });
+      }
+    });
+  }
+
+  if (sayonaraOrderRowsEl) {
+    sayonaraOrderRowsEl.addEventListener('click', (event) => {
+      const retryButton = event.target.closest('.js-send-sayonara-retry-email');
+      if (retryButton) {
+        const sayonaraOrderId = retryButton.getAttribute('data-sayonara-order-id');
+        if (!sayonaraOrderId) return;
+        sendSayonaraRetryPaymentEmail(sayonaraOrderId).catch((error) => {
+          window.alert(error.message);
+        });
+        return;
+      }
+
+      const checkButton = event.target.closest('.js-check-sayonara-stripe-payment');
+      if (checkButton) {
+        const sayonaraOrderId = checkButton.getAttribute('data-sayonara-order-id');
+        if (!sayonaraOrderId) return;
+        checkSayonaraStripePayment(sayonaraOrderId).catch((error) => {
+          window.alert(error.message);
+        });
+        return;
+      }
+
+      const deleteButton = event.target.closest('.js-delete-sayonara-order');
+      if (deleteButton) {
+        const sayonaraOrderId = deleteButton.getAttribute('data-sayonara-order-id');
+        if (!sayonaraOrderId) return;
+        deleteSayonaraOrder(sayonaraOrderId).catch((error) => {
           window.alert(error.message);
         });
       }

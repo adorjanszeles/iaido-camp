@@ -208,6 +208,7 @@
                     <option value="">All invoice types</option>
                     <option value="registration">Registration</option>
                     <option value="catering_order">Catering</option>
+                    <option value="sayonara_order">Sayonara</option>
                   </select>
                 </div>
                 <div class="field full">
@@ -323,6 +324,53 @@
                     </tr>
                   </thead>
                   <tbody id="catering-order-rows"></tbody>
+                </table>
+              </div>
+            </div>
+          </details>
+
+          <details class="card faq-item admin-accordion-item">
+            <summary>Sayonara Orders</summary>
+            <div class="accordion-content">
+              <div class="form-grid" style="margin: 0 0 0.8rem;">
+                <div class="field">
+                  <label for="sayonara-order-search">Filter by name or email</label>
+                  <input id="sayonara-order-search" type="search" placeholder="Type a name or email..." autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label for="sayonara-order-status-filter">Filter by status</label>
+                  <select id="sayonara-order-status-filter">
+                    <option value="">All statuses</option>
+                    <option value="PENDING_PAYMENT">PENDING_PAYMENT</option>
+                    <option value="PAID">PAID</option>
+                  </select>
+                </div>
+                <div class="field full">
+                  <p id="sayonara-order-search-meta" class="helper">Showing 0 Sayonara orders.</p>
+                </div>
+                <div class="field full">
+                  <p id="sayonara-invite-meta" class="helper">Eligible paid registrations for Sayonara invite: 0.</p>
+                </div>
+                <div class="field full cta-row">
+                  <button class="btn secondary" id="send-all-sayonara-invites-btn" type="button">Send Sayonara invites to all eligible paid registrations</button>
+                  <button class="btn secondary" id="export-sayonara-csv-btn" type="button">Export Sayonara CSV</button>
+                </div>
+              </div>
+
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Created</th>
+                      <th>Order ID</th>
+                      <th>Registration</th>
+                      <th>Status</th>
+                      <th>Details</th>
+                      <th>Amount</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="sayonara-order-rows"></tbody>
                 </table>
               </div>
             </div>

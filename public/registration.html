@@ -17,6 +17,7 @@
           <a href="/senseis">Senseis</a>
           <a href="/news">News</a>
           <a href="/program">Program</a>
+          <a href="/sayonara-party">Sayonara Party</a>
           <a href="/exam">Exam</a>
           <a href="/faq">FAQ</a>
           <a class="active" href="/registration">Registration</a>
@@ -233,6 +234,34 @@
                 <label class="checkline"><input type="checkbox" name="cateringDay" value="2026-08-02" /> <span>Day 4 - August 2, 2026</span></label>
                 <label class="checkline"><input type="checkbox" name="cateringDay" value="2026-08-03" /> <span>Day 5 - August 3, 2026</span></label>
               </div>
+            </div>
+          </div>
+
+          <h2>Sayonara Party</h2>
+          <p class="helper">
+            Saturday evening Sayonara Party at Trófea Grill Event House Zugló. Base price: EUR 69 per person.
+          </p>
+          <p class="helper">
+            Optional pálinka coupon package: EUR 30 per package, each package contains 10 shots.
+          </p>
+          <div class="form-grid">
+            <div class="field full">
+              <label class="checkline" for="sayonaraAttending">
+                <input id="sayonaraAttending" name="sayonaraAttending" type="checkbox" />
+                <span>I would like to join the Sayonara Party.</span>
+              </label>
+            </div>
+
+            <div class="field">
+              <label for="sayonaraSpiritsPackageCount">Pálinka coupon packages</label>
+              <input id="sayonaraSpiritsPackageCount" name="sayonaraSpiritsPackageCount" type="number" min="0" step="1" value="0" />
+              <p class="helper">One package means 10 shots.</p>
+            </div>
+
+            <div class="field full">
+              <label for="sayonaraFoodNotes">Food sensitivity or dietary request</label>
+              <textarea id="sayonaraFoodNotes" name="sayonaraFoodNotes" maxlength="4000"></textarea>
+              <p class="helper">We can only accommodate this to a limited extent, but we will do our best.</p>
             </div>
           </div>
 

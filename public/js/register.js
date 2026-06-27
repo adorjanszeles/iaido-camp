@@ -20,6 +20,9 @@
   const priceTotalEl = document.getElementById('price-total');
   const pricingTierNoteEl = document.getElementById('pricing-tier-note');
   const cateringDayEls = Array.from(form.querySelectorAll('input[name="cateringDay"]'));
+  const sayonaraAttendingEl = document.getElementById('sayonaraAttending');
+  const sayonaraSpiritsPackageCountEl = document.getElementById('sayonaraSpiritsPackageCount');
+  const sayonaraFoodNotesEl = document.getElementById('sayonaraFoodNotes');
   const messageEl = document.getElementById('form-message');
   const submitBtn = document.getElementById('submit-btn');
   const campTypesRequiringAttendanceDay = new Set(['one_day', 'one_and_half_days']);
@@ -324,11 +327,38 @@
       });
     }
 
+    const sayonaraAttending = Boolean(sayonaraAttendingEl?.checked);
+    const sayonaraSpiritsPackageCount = Math.max(0, Math.floor(Number(sayonaraSpiritsPackageCountEl?.value || 0) || 0));
+    if (sayonaraAttending) {
+      lineItems.push({
+        key: 'sayonara',
+        code: 'party',
+        label: 'Sayonara Party',
+        amount: 69,
+        regularAmount: 69,
+        earlyBirdAmount: 69,
+        pricingTier: 'regular'
+      });
+      if (sayonaraSpiritsPackageCount > 0) {
+        lineItems.push({
+          key: 'sayonara_spirits',
+          code: 'spirits_package',
+          label: `Pálinka coupon package (${sayonaraSpiritsPackageCount}x)`,
+          amount: sayonaraSpiritsPackageCount * 30,
+          regularAmount: sayonaraSpiritsPackageCount * 30,
+          earlyBirdAmount: sayonaraSpiritsPackageCount * 30,
+          pricingTier: 'regular'
+        });
+      }
+    }
+
     const totalAmount = lineItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
     return {
       campType,
       selectedCateringDays,
+      sayonaraAttending,
+      sayonaraSpiritsPackageCount,
       lineItems,
       totalAmount
     };
@@ -366,6 +396,9 @@
       cateringSelection: Object.fromEntries(
         cateringDayEls.map((input) => [String(input.value || '').trim(), input.checked])
       ),
+      sayonaraAttending: Boolean(raw.get('sayonaraAttending')),
+      sayonaraSpiritsPackageCount: raw.get('sayonaraSpiritsPackageCount'),
+      sayonaraFoodNotes: raw.get('sayonaraFoodNotes'),
       wantsExamIaido: Boolean(raw.get('wantsExamIaido')),
       targetGradeIaido: raw.get('targetGradeIaido'),
       wantsExamJodo: Boolean(raw.get('wantsExamJodo')),
@@ -514,6 +547,12 @@
   cateringDayEls.forEach((input) => {
     input.addEventListener('change', renderPriceSummary);
   });
+  if (sayonaraAttendingEl) {
+    sayonaraAttendingEl.addEventListener('change', renderPriceSummary);
+  }
+  if (sayonaraSpiritsPackageCountEl) {
+    sayonaraSpiritsPackageCountEl.addEventListener('input', renderPriceSummary);
+  }
   form.addEventListener('submit', submitForm);
 
   if (dateOfBirthEl && dateOfBirthPickerEl && dateOfBirthEl.value) {
