@@ -1375,7 +1375,10 @@ function encodeMimeHeaderValue(value) {
   const normalized = String(value || '').replace(/[\r\n]+/g, ' ').trim();
   if (!normalized) return '';
   if (/^[\x20-\x7E]+$/.test(normalized)) {
-  return normalized;
+    return normalized;
+  }
+
+  return `=?UTF-8?B?${Buffer.from(normalized, 'utf8').toString('base64')}?=`;
 }
 
 function getNumericAppSettingValue(db, key) {
@@ -1395,8 +1398,6 @@ function getTrackedDownloadCounts(db) {
     certificateDownloadCount: getNumericAppSettingValue(db, APP_SETTING_KEY_CERTIFICATE_DOWNLOAD_COUNT),
     handbookDownloadCount: getNumericAppSettingValue(db, APP_SETTING_KEY_HANDBOOK_DOWNLOAD_COUNT)
   };
-}
-  return `=?UTF-8?B?${Buffer.from(normalized, 'utf8').toString('base64')}?=`;
 }
 
 function formatSmtpAddressHeader(name, email) {
