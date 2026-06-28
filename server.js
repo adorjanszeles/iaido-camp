@@ -102,6 +102,8 @@ const EMAIL_REQUEST_TIMEOUT_MS = 8000;
 const APP_SETTING_KEY_PRICING = 'pricing_settings_v1';
 const APP_SETTING_KEY_ADMIN_AUTH = 'admin_auth_v1';
 const APP_SETTING_KEY_ADMIN_SESSION_SECRET = 'admin_session_secret_v1';
+const APP_SETTING_KEY_CERTIFICATE_DOWNLOAD_COUNT = 'certificate_download_count_v1';
+const APP_SETTING_KEY_HANDBOOK_DOWNLOAD_COUNT = 'handbook_download_count_v1';
 const ADMIN_EMAIL_TEMPLATES = [
   {
     key: 'important_update',
@@ -1373,8 +1375,27 @@ function encodeMimeHeaderValue(value) {
   const normalized = String(value || '').replace(/[\r\n]+/g, ' ').trim();
   if (!normalized) return '';
   if (/^[\x20-\x7E]+$/.test(normalized)) {
-    return normalized;
-  }
+  return normalized;
+}
+
+function getNumericAppSettingValue(db, key) {
+  const raw = String(getAppSettingValue(db, key) || '').trim();
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+}
+
+function incrementNumericAppSettingValue(db, key) {
+  const nextValue = getNumericAppSettingValue(db, key) + 1;
+  setAppSettingValue(db, key, String(nextValue));
+  return nextValue;
+}
+
+function getTrackedDownloadCounts(db) {
+  return {
+    certificateDownloadCount: getNumericAppSettingValue(db, APP_SETTING_KEY_CERTIFICATE_DOWNLOAD_COUNT),
+    handbookDownloadCount: getNumericAppSettingValue(db, APP_SETTING_KEY_HANDBOOK_DOWNLOAD_COUNT)
+  };
+}
   return `=?UTF-8?B?${Buffer.from(normalized, 'utf8').toString('base64')}?=`;
 }
 
@@ -6934,7 +6955,7 @@ function serveFile(res, filePath) {
   });
 }
 
-function getStats(registrations, cateringOrders = []) {
+function getStats(registrations, cateringOrders = [], extra = {}) {
   const activeRegistrations = registrations.filter((r) => r.status !== 'DELETED' && r.status !== 'ANONYMIZED');
   const deletedCount = registrations.filter((r) => r.status === 'DELETED').length;
   const anonymizedCount = registrations.filter((r) => r.status === 'ANONYMIZED').length;
@@ -7003,6 +7024,8 @@ function getStats(registrations, cateringOrders = []) {
       .filter((item) => activeRegistrationIds.has(item.registrationId))
       .reduce((sum, item) => sum + getCateringDaysCount(item.cateringSelection), 0);
   const lunchRegistrantCount = lunchRegistrantIds.size;
+  const certificateDownloadCount = Number(extra.certificateDownloadCount || 0);
+  const handbookDownloadCount = Number(extra.handbookDownloadCount || 0);
 
   return {
     total,
@@ -7027,7 +7050,9 @@ function getStats(registrations, cateringOrders = []) {
     lastRegistrationAt,
     lunchDaySummary,
     totalLunchSelections,
-    lunchRegistrantCount
+    lunchRegistrantCount,
+    certificateDownloadCount,
+    handbookDownloadCount
   };
 }
 
@@ -7122,6 +7147,34 @@ function createServer(options = {}) {
       sendJson(res, 200, {
         countries: COUNTRY_OPTIONS
       });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/downloads/certificate') {
+      const filePath = path.join(PUBLIC_DIR, 'assets', 'CERTIFICATE-OF-PARTICIPATION.pdf');
+      try {
+        await runWithSqliteRetry(() => incrementNumericAppSettingValue(db, APP_SETTING_KEY_CERTIFICATE_DOWNLOAD_COUNT));
+      } catch (error) {
+        console.error(`Certificate download counter update failed: ${error.message}`);
+      }
+      res.writeHead(302, { Location: '/assets/CERTIFICATE-OF-PARTICIPATION.pdf' });
+      res.end();
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/downloads/participant-handbook') {
+      const filePath = path.join(PUBLIC_DIR, 'assets', 'Official-Participant-Handbook.pdf');
+      if (!fs.existsSync(filePath)) {
+        sendJson(res, 404, { error: 'Participant handbook not found.' });
+        return;
+      }
+      try {
+        await runWithSqliteRetry(() => incrementNumericAppSettingValue(db, APP_SETTING_KEY_HANDBOOK_DOWNLOAD_COUNT));
+      } catch (error) {
+        console.error(`Handbook download counter update failed: ${error.message}`);
+      }
+      res.writeHead(302, { Location: '/assets/Official-Participant-Handbook.pdf' });
+      res.end();
       return;
     }
 
@@ -7744,7 +7797,7 @@ function createServer(options = {}) {
       }
       const registrations = readRegistrations(db);
       const cateringOrders = readCateringOrders(db);
-      sendJson(res, 200, { stats: getStats(registrations, cateringOrders) });
+      sendJson(res, 200, { stats: getStats(registrations, cateringOrders, getTrackedDownloadCounts(db)) });
       return;
     }
 

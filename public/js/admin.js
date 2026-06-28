@@ -125,6 +125,8 @@
     const projectedRevenue = Number(stats.projectedRevenueEur || 0);
     const lunchRegistrantCount = Number(stats.lunchRegistrantCount || 0);
     const totalLunchSelections = Number(stats.totalLunchSelections || 0);
+    const handbookDownloadCount = Number(stats.handbookDownloadCount || 0);
+    const certificateDownloadCount = Number(stats.certificateDownloadCount || 0);
     const lunchSummaryCards = stats.lunchDaySummary && typeof stats.lunchDaySummary === 'object'
       ? Object.entries(stats.lunchDaySummary).map(([day, count]) => renderStatCard(`Lunch ${formatOption('attendanceDay', day)}`, Number(count || 0)))
       : [];
@@ -140,6 +142,8 @@
       renderStatCard('Projected revenue (EUR)', formatCurrency(projectedRevenue, 'EUR')),
       renderStatCard('Lunch registrants', lunchRegistrantCount),
       renderStatCard('Total lunch day selections', totalLunchSelections),
+      renderStatCard('Handbook downloads', handbookDownloadCount),
+      renderStatCard('Certificate downloads', certificateDownloadCount),
       ...lunchSummaryCards
     ].join('');
   }
