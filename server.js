@@ -7067,6 +7067,7 @@ function getStaticFilePath(urlPath) {
     '/faq': 'faq.html',
     '/info': 'info.html',
     '/senseis': 'senseis-oshita.html',
+    '/senseis/otake': 'senseis-otake.html',
     '/senseis/oshita': 'senseis-oshita.html',
     '/senseis/ishii': 'senseis-ishii.html',
     '/senseis/takizawa': 'senseis-takizawa.html',
