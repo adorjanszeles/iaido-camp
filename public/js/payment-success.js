@@ -9,6 +9,9 @@
   function cleanUrl() {
     url.searchParams.delete('session_id');
     url.searchParams.delete('registration_id');
+    url.searchParams.delete('catering_order_id');
+    url.searchParams.delete('sayonara_order_id');
+    url.searchParams.delete('sayonara_guest_order_id');
     const next = `${url.pathname}${url.searchParams.toString() ? `?${url.searchParams.toString()}` : ''}`;
     window.history.replaceState({}, document.title, next);
   }
@@ -40,14 +43,24 @@
       if (result.paid || status === 'PAID') {
         subtitleEl.textContent = entityType === 'catering_order'
           ? 'Lunch payment confirmed successfully.'
-          : 'Payment confirmed successfully.';
+          : (entityType === 'sayonara_guest_order'
+            ? 'Sayonara +1 payment confirmed successfully.'
+            : (entityType === 'sayonara_order' ? 'Sayonara payment confirmed successfully.' : 'Payment confirmed successfully.'));
         metaEl.textContent = entityType === 'catering_order'
           ? `Lunch order ID: ${result.cateringOrderId}. Status: ${status || 'PAID'}.`
-          : `Registration ID: ${result.registrationId}. Status: ${status || 'PAID'}.`;
+          : (entityType === 'sayonara_guest_order'
+            ? `Sayonara +1 order ID: ${result.sayonaraGuestOrderId}. Status: ${status || 'PAID'}.`
+            : (entityType === 'sayonara_order'
+              ? `Sayonara order ID: ${result.sayonaraOrderId}. Status: ${status || 'PAID'}.`
+              : `Registration ID: ${result.registrationId}. Status: ${status || 'PAID'}.`));
       } else {
         subtitleEl.textContent = entityType === 'catering_order'
           ? 'Lunch payment return was successful, but the order is not marked as paid yet.'
-          : 'Payment return was successful, but payment is not marked as paid yet.';
+          : (entityType === 'sayonara_guest_order'
+            ? 'Sayonara +1 payment return was successful, but the order is not marked as paid yet.'
+            : (entityType === 'sayonara_order'
+              ? 'Sayonara payment return was successful, but the order is not marked as paid yet.'
+              : 'Payment return was successful, but payment is not marked as paid yet.'));
         metaEl.textContent = `Current status: ${status || 'PENDING_PAYMENT'}. Please contact the organizer if this does not change soon.`;
       }
     })

@@ -415,6 +415,8 @@
         const hasSeparateCateringOrder = Boolean(item.hasCateringOrder);
         const hasMainSayonaraSelection = Boolean(item.sayonaraAttending);
         const hasSeparateSayonaraOrder = Boolean(item.hasSayonaraOrder);
+        const hasPaidSeparateSayonaraOrder = Boolean(item.hasPaidSayonaraOrder);
+        const hasSayonaraGuestOrder = Boolean(item.hasSayonaraGuestOrder);
         const canHardDelete = isDeleted || isAnonymized;
         const amount = Number(item.amount ?? item.amountHuf ?? 0);
         const deleteAction = isDeleted || isAnonymized
@@ -447,8 +449,11 @@
         const sayonaraInviteAction = isPaid && !hasMainSayonaraSelection && !hasSeparateSayonaraOrder
           ? `<button class="btn secondary btn-small js-send-sayonara-invite" data-registration-id="${item.id}" type="button">Send Sayonara invite</button>`
           : '<span class="helper">-</span>';
+        const sayonaraGuestInviteAction = isPaid && !hasSayonaraGuestOrder && (hasMainSayonaraSelection || hasPaidSeparateSayonaraOrder)
+          ? `<button class="btn secondary btn-small js-send-sayonara-guest-invite" data-registration-id="${item.id}" type="button">Send Sayonara +1 invite</button>`
+          : '<span class="helper">-</span>';
         const detailsToggle = `<button class="btn secondary btn-small js-toggle-details" data-registration-id="${item.id}" aria-expanded="false" type="button">Show details</button>`;
-        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${emailEditAction}<div style="height:0.35rem"></div>${examEditAction}<div style="height:0.35rem"></div>${cateringInviteAction}<div style="height:0.35rem"></div>${sayonaraInviteAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}<div style="height:0.35rem"></div>${hardDeleteAction}<div style="height:0.35rem"></div>${forceHardDeleteAction}`;
+        const actionButtons = `${detailsToggle}<div style="height:0.35rem"></div>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${emailEditAction}<div style="height:0.35rem"></div>${examEditAction}<div style="height:0.35rem"></div>${cateringInviteAction}<div style="height:0.35rem"></div>${sayonaraInviteAction}<div style="height:0.35rem"></div>${sayonaraGuestInviteAction}<div style="height:0.35rem"></div>${deleteAction}<div style="height:0.35rem"></div>${anonymizeAction}<div style="height:0.35rem"></div>${hardDeleteAction}<div style="height:0.35rem"></div>${forceHardDeleteAction}`;
         const detailRow = `
           <tr class="registration-details-row" data-details-row="${item.id}" hidden>
             <td colspan="7">
@@ -505,7 +510,9 @@
         const entityType = String(item.entityType || 'registration').trim();
         const entityLabel = entityType === 'catering_order'
           ? 'Catering'
-          : (entityType === 'sayonara_order' ? 'Sayonara' : 'Registration');
+          : (entityType === 'sayonara_order'
+            ? 'Sayonara'
+            : (entityType === 'sayonara_guest_order' ? 'Sayonara +1' : 'Registration'));
         const registrationId = String(item.registrationId || '');
         const person = String(item.registrationFullName || '').trim();
         const email = String(item.registrationEmail || '').trim();
@@ -771,8 +778,8 @@
     const hasFilter = Boolean(options.hasFilter);
     if (!orders.length) {
       sayonaraOrderRowsEl.innerHTML = hasFilter
-        ? '<tr><td colspan="7">No matching Sayonara orders.</td></tr>'
-        : '<tr><td colspan="7">No Sayonara orders yet.</td></tr>';
+        ? '<tr><td colspan="8">No matching Sayonara orders.</td></tr>'
+        : '<tr><td colspan="8">No Sayonara orders yet.</td></tr>';
       return;
     }
 
@@ -780,25 +787,39 @@
       .slice()
       .reverse()
       .map((item) => {
+        const entityType = String(item.entityType || 'sayonara_order').trim();
+        const entityId = String(item.id || '').trim();
         const isPendingPayment = String(item.status || '').trim().toUpperCase() === 'PENDING_PAYMENT';
+        const canSendGuestInvite = Boolean(item.canSendGuestInvite);
         const stripeCheckAction = isPendingPayment
-          ? `<button class="btn secondary btn-small js-check-sayonara-stripe-payment" data-sayonara-order-id="${item.id}" type="button">Check Stripe payment</button>`
+          ? `<button class="btn secondary btn-small js-check-sayonara-stripe-payment" data-sayonara-entity-type="${escapeHtml(entityType)}" data-sayonara-entity-id="${escapeHtml(entityId)}" type="button">Check Stripe payment</button>`
           : '<span class="helper">-</span>';
         const retryEmailAction = isPendingPayment
-          ? `<button class="btn secondary btn-small js-send-sayonara-retry-email" data-sayonara-order-id="${item.id}" type="button">Send payment link email</button>`
+          ? `<button class="btn secondary btn-small js-send-sayonara-retry-email" data-sayonara-entity-type="${escapeHtml(entityType)}" data-sayonara-entity-id="${escapeHtml(entityId)}" type="button">Send payment link email</button>`
           : '<span class="helper">-</span>';
         const deleteAction = isPendingPayment
-          ? `<button class="btn secondary btn-small js-delete-sayonara-order" data-sayonara-order-id="${item.id}" type="button">Delete Sayonara order</button>`
+          ? `<button class="btn secondary btn-small js-delete-sayonara-order" data-sayonara-entity-type="${escapeHtml(entityType)}" data-sayonara-entity-id="${escapeHtml(entityId)}" type="button">Delete Sayonara order</button>`
           : '<span class="helper">-</span>';
+        const guestInviteAction = canSendGuestInvite
+          ? `<button class="btn secondary btn-small js-send-sayonara-guest-invite" data-registration-id="${escapeHtml(String(item.registrationId || ''))}" type="button">Send Sayonara +1 invite</button>`
+          : '<span class="helper">-</span>';
+        const orderKindLabel = entityType === 'sayonara_guest_order' ? '+1 guest' : 'Standard';
+        const detailLines = [];
+        if (entityType === 'sayonara_guest_order' && item.guestFullName) {
+          detailLines.push(`<span class="helper">Guest: ${escapeHtml(item.guestFullName)}</span>`);
+        }
+        detailLines.push(`<span class="helper">Packages: ${escapeHtml(String(item.spiritsPackageCount || 0))}</span>`);
+        const detailsMarkup = detailLines.join('<br />');
         return `
           <tr>
             <td>${formatDateTime(item.createdAt)}</td>
             <td>${escapeHtml(item.id || '-')}</td>
             <td>${escapeHtml(item.registrationFullName || '-')}<br /><span class="helper">${escapeHtml(item.registrationEmail || '-')}</span></td>
+            <td>${escapeHtml(orderKindLabel)}</td>
             <td>${escapeHtml(item.status || '-')}<br /><span class="helper">${escapeHtml(item.invoiceStatus || '-')}</span></td>
-            <td><span class="helper">Packages: ${escapeHtml(String(item.spiritsPackageCount || 0))}</span></td>
+            <td>${detailsMarkup}</td>
             <td>${formatCurrency(Number(item.amount || 0), item.currency || 'EUR')}</td>
-            <td>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${deleteAction}</td>
+            <td>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${guestInviteAction}<div style="height:0.35rem"></div>${deleteAction}</td>
           </tr>
         `;
       })
@@ -811,8 +832,9 @@
     const filtered = allSayonaraOrders.filter((item) => {
       const fullName = String(item.registrationFullName || '').toLowerCase();
       const email = String(item.registrationEmail || '').toLowerCase();
+      const guestFullName = String(item.guestFullName || '').toLowerCase();
       const status = String(item.status || '').trim();
-      const matchesQuery = !query || fullName.includes(query) || email.includes(query);
+      const matchesQuery = !query || fullName.includes(query) || email.includes(query) || guestFullName.includes(query);
       const matchesStatus = !statusFilter || status === statusFilter;
       return matchesQuery && matchesStatus;
     });
@@ -1623,6 +1645,25 @@
     window.alert(result.message || 'Sayonara invitation email sent.');
   }
 
+  async function sendSayonaraGuestInviteEmail(registrationId) {
+    const response = await fetch('/api/admin/registrations/send-sayonara-guest-invite-email', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ registrationId })
+    });
+    const result = await readJsonResponseOrThrow(response);
+    if (response.status === 401) {
+      window.location.href = '/admin';
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to send Sayonara +1 invitation email.');
+    }
+    window.alert(result.message || 'Sayonara +1 invitation email sent.');
+  }
+
   async function sendAllSayonaraInvites() {
     if (isEmailJobRunning()) {
       showEmailMessage('error', 'Another email job is already running.');
@@ -1817,13 +1858,13 @@
     await loadData();
   }
 
-  async function sendSayonaraRetryPaymentEmail(sayonaraOrderId) {
+  async function sendSayonaraRetryPaymentEmail(entityType, entityId) {
     const response = await fetch('/api/admin/sayonara-orders/send-retry-payment-email', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ sayonaraOrderId })
+      body: JSON.stringify({ entityType, entityId })
     });
     const result = await readJsonResponseOrThrow(response);
     if (response.status === 401) {
@@ -1836,13 +1877,13 @@
     window.alert(result.message || 'Sayonara payment link email sent.');
   }
 
-  async function checkSayonaraStripePayment(sayonaraOrderId) {
+  async function checkSayonaraStripePayment(entityType, entityId) {
     const response = await fetch('/api/admin/sayonara-orders/check-stripe-payment', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ sayonaraOrderId })
+      body: JSON.stringify({ entityType, entityId })
     });
     const result = await readJsonResponseOrThrow(response);
     if (response.status === 401) {
@@ -1854,7 +1895,7 @@
     }
     const lines = [
       result.message || 'Stripe payment check completed.',
-      `Sayonara order ID: ${result.sayonaraOrderId || sayonaraOrderId}`,
+      `Sayonara order ID: ${result.sayonaraGuestOrderId || result.sayonaraOrderId || entityId}`,
       `Order status: ${result.sayonaraOrderStatus || '-'}`,
       `Stripe payment status: ${result?.stripe?.paymentStatus || '-'}`,
       `Stripe checkout status: ${result?.stripe?.checkoutStatus || '-'}`,
@@ -1864,9 +1905,11 @@
     await loadData();
   }
 
-  async function deleteSayonaraOrder(sayonaraOrderId) {
+  async function deleteSayonaraOrder(entityType, entityId) {
     const shouldProceed = window.confirm(
-      'Delete this unpaid Sayonara order? This will also revoke existing Sayonara access links for this registration and expire the stored Stripe checkout session.'
+      entityType === 'sayonara_guest_order'
+        ? 'Delete this unpaid Sayonara +1 order? This will also revoke existing Sayonara +1 access links for this registration and expire the stored Stripe checkout session.'
+        : 'Delete this unpaid Sayonara order? This will also revoke existing Sayonara access links for this registration and expire the stored Stripe checkout session.'
     );
     if (!shouldProceed) return;
 
@@ -1875,7 +1918,7 @@
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ sayonaraOrderId })
+      body: JSON.stringify({ entityType, entityId })
     });
     const result = await readJsonResponseOrThrow(response);
     if (response.status === 401) {
@@ -2427,6 +2470,18 @@
       return;
     }
 
+    const sayonaraGuestInviteButton = event.target.closest('.js-send-sayonara-guest-invite');
+    if (sayonaraGuestInviteButton) {
+      const registrationId = sayonaraGuestInviteButton.getAttribute('data-registration-id');
+      if (!registrationId) return;
+      sendSayonaraGuestInviteEmail(registrationId)
+        .then(() => loadData())
+        .catch((error) => {
+          window.alert(error.message);
+        });
+      return;
+    }
+
     const checkStripeButton = event.target.closest('.js-check-stripe-payment');
     if (checkStripeButton) {
       const registrationId = checkStripeButton.getAttribute('data-registration-id');
@@ -2516,9 +2571,10 @@
     sayonaraOrderRowsEl.addEventListener('click', (event) => {
       const retryButton = event.target.closest('.js-send-sayonara-retry-email');
       if (retryButton) {
-        const sayonaraOrderId = retryButton.getAttribute('data-sayonara-order-id');
-        if (!sayonaraOrderId) return;
-        sendSayonaraRetryPaymentEmail(sayonaraOrderId).catch((error) => {
+        const entityType = retryButton.getAttribute('data-sayonara-entity-type') || 'sayonara_order';
+        const entityId = retryButton.getAttribute('data-sayonara-entity-id');
+        if (!entityId) return;
+        sendSayonaraRetryPaymentEmail(entityType, entityId).catch((error) => {
           window.alert(error.message);
         });
         return;
@@ -2526,9 +2582,10 @@
 
       const checkButton = event.target.closest('.js-check-sayonara-stripe-payment');
       if (checkButton) {
-        const sayonaraOrderId = checkButton.getAttribute('data-sayonara-order-id');
-        if (!sayonaraOrderId) return;
-        checkSayonaraStripePayment(sayonaraOrderId).catch((error) => {
+        const entityType = checkButton.getAttribute('data-sayonara-entity-type') || 'sayonara_order';
+        const entityId = checkButton.getAttribute('data-sayonara-entity-id');
+        if (!entityId) return;
+        checkSayonaraStripePayment(entityType, entityId).catch((error) => {
           window.alert(error.message);
         });
         return;
@@ -2536,9 +2593,20 @@
 
       const deleteButton = event.target.closest('.js-delete-sayonara-order');
       if (deleteButton) {
-        const sayonaraOrderId = deleteButton.getAttribute('data-sayonara-order-id');
-        if (!sayonaraOrderId) return;
-        deleteSayonaraOrder(sayonaraOrderId).catch((error) => {
+        const entityType = deleteButton.getAttribute('data-sayonara-entity-type') || 'sayonara_order';
+        const entityId = deleteButton.getAttribute('data-sayonara-entity-id');
+        if (!entityId) return;
+        deleteSayonaraOrder(entityType, entityId).catch((error) => {
+          window.alert(error.message);
+        });
+        return;
+      }
+
+      const guestInviteButton = event.target.closest('.js-send-sayonara-guest-invite');
+      if (guestInviteButton) {
+        const registrationId = guestInviteButton.getAttribute('data-registration-id');
+        if (!registrationId) return;
+        sendSayonaraGuestInviteEmail(registrationId).catch((error) => {
           window.alert(error.message);
         });
       }

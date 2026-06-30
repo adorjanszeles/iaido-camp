@@ -1165,6 +1165,18 @@ function buildStripeSuccessUrlForSayonara(baseUrl, sayonaraOrderId) {
   return addQueryParamsToUrl(raw, extra);
 }
 
+function buildStripeSuccessUrlForSayonaraGuest(baseUrl, sayonaraGuestOrderId) {
+  const raw = String(baseUrl || '').trim();
+  const extra = [];
+  if (!/(?:\?|&)session_id=/.test(raw)) {
+    extra.push('session_id={CHECKOUT_SESSION_ID}');
+  }
+  if (sayonaraGuestOrderId && !/(?:\?|&)sayonara_guest_order_id=/.test(raw)) {
+    extra.push(`sayonara_guest_order_id=${encodeURIComponent(String(sayonaraGuestOrderId))}`);
+  }
+  return addQueryParamsToUrl(raw, extra);
+}
+
 function getStripeStringId(value) {
   if (typeof value === 'string') return value.trim();
   if (value && typeof value === 'object' && typeof value.id === 'string') return String(value.id).trim();
@@ -1183,6 +1195,10 @@ function extractCateringOrderIdFromStripeSession(session) {
 
 function extractSayonaraOrderIdFromStripeSession(session) {
   return String(session?.metadata?.sayonara_order_id || '').trim();
+}
+
+function extractSayonaraGuestOrderIdFromStripeSession(session) {
+  return String(session?.metadata?.sayonara_guest_order_id || '').trim();
 }
 
 function extractStripeSessionIdentifiers(session) {
@@ -2297,6 +2313,11 @@ function buildSzamlazzSayonaraExternalId(sayonaraOrderId) {
   return `${SZAMLAZZ_EXTERNAL_ID_PREFIX}sayonara-${safeId}`;
 }
 
+function buildSzamlazzSayonaraGuestExternalId(sayonaraGuestOrderId) {
+  const safeId = String(sayonaraGuestOrderId || '').trim();
+  return `${SZAMLAZZ_EXTERNAL_ID_PREFIX}sayonara-guest-${safeId}`;
+}
+
 function calculateVatBreakdown(grossAmount, vatKey) {
   const gross = roundMoney(grossAmount);
   const rate = Number(String(vatKey || '').replace(',', '.'));
@@ -2471,6 +2492,67 @@ function buildSzamlazzInvoiceXmlForSayonaraOrder(registration, sayonaraOrder, op
     <szamlaNyelve>${escapeXml(SZAMLAZZ_INVOICE_LANGUAGE)}</szamlaNyelve>
     <megjegyzes>${escapeXml(SZAMLAZZ_COMMENT)}</megjegyzes>
     <rendelesSzam>${escapeXml(sayonaraOrder.id)}</rendelesSzam>
+    <fizetve>${toBooleanXml(SZAMLAZZ_SET_PAID)}</fizetve>
+  </fejlec>
+  <elado />
+  <vevo>
+    <nev>${escapeXml(registration.billingFullName || registration.fullName || '')}</nev>
+    <irsz>${escapeXml(registration.billingZip || '')}</irsz>
+    <telepules>${escapeXml(registration.billingCity || '')}</telepules>
+    <cim>${escapeXml(registration.billingAddress || '')}</cim>
+    <orszag>${escapeXml(registration.billingCountry || '')}</orszag>
+    <email>${escapeXml(registration.email || '')}</email>
+    <sendEmail>${toBooleanXml(SZAMLAZZ_SEND_EMAIL)}</sendEmail>
+  </vevo>
+  <tetelek>
+    <tetel>
+      <megnevezes>${escapeXml(description)}</megnevezes>
+      <mennyiseg>1</mennyiseg>
+      <mennyisegiEgyseg>db</mennyisegiEgyseg>
+      <nettoEgysegar>${formatMoneyXml(breakdown.net)}</nettoEgysegar>
+      <afakulcs>${escapeXml(vatKey)}</afakulcs>
+      <nettoErtek>${formatMoneyXml(breakdown.net)}</nettoErtek>
+      <afaErtek>${formatMoneyXml(breakdown.vat)}</afaErtek>
+      <bruttoErtek>${formatMoneyXml(breakdown.gross)}</bruttoErtek>
+    </tetel>
+  </tetelek>
+</xmlszamla>`;
+}
+
+function buildSzamlazzInvoiceXmlForSayonaraGuestOrder(registration, sayonaraGuestOrder, options = {}) {
+  const externalId = String(options.externalId || buildSzamlazzSayonaraGuestExternalId(sayonaraGuestOrder.id)).trim();
+  const invoiceDate = String(options.invoiceDate || getTodayDateString()).trim() || getTodayDateString();
+  const dueDate = String(options.dueDate || invoiceDate).trim() || invoiceDate;
+  const amount = Number(sayonaraGuestOrder.amount || 0);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw createError(400, 'Invalid Sayonara guest amount for invoice creation.');
+  }
+
+  const vatKey = String(options.vatKey || SZAMLAZZ_AFAKULCS).trim() || 'TAM';
+  const breakdown = calculateVatBreakdown(amount, vatKey);
+  const guestFullName = String(sayonaraGuestOrder.guestFullName || '').trim();
+  const description = String(
+    options.description || (guestFullName ? `Sayonara Party +1 guest - ${guestFullName}` : 'Sayonara Party +1 guest')
+  ).trim() || 'Sayonara Party +1 guest';
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<xmlszamla xmlns="http://www.szamlazz.hu/xmlszamla" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.szamlazz.hu/xmlszamla https://www.szamlazz.hu/szamla/docs/xsds/agent/xmlszamla.xsd">
+  <beallitasok>
+    <szamlaagentkulcs>${escapeXml(SZAMLAZZ_AGENT_KEY)}</szamlaagentkulcs>
+    <eszamla>${toBooleanXml(SZAMLAZZ_ESZAMLA)}</eszamla>
+    <szamlaLetoltes>false</szamlaLetoltes>
+    <valaszVerzio>2</valaszVerzio>
+    <szamlaKulsoAzon>${escapeXml(externalId)}</szamlaKulsoAzon>
+  </beallitasok>
+  <fejlec>
+    <keltDatum>${escapeXml(invoiceDate)}</keltDatum>
+    <teljesitesDatum>${escapeXml(invoiceDate)}</teljesitesDatum>
+    <fizetesiHataridoDatum>${escapeXml(dueDate)}</fizetesiHataridoDatum>
+    <fizmod>${escapeXml(SZAMLAZZ_PAYMENT_METHOD)}</fizmod>
+    <penznem>${escapeXml(String(sayonaraGuestOrder.currency || 'EUR').toUpperCase())}</penznem>
+    <szamlaNyelve>${escapeXml(SZAMLAZZ_INVOICE_LANGUAGE)}</szamlaNyelve>
+    <megjegyzes>${escapeXml(SZAMLAZZ_COMMENT)}</megjegyzes>
+    <rendelesSzam>${escapeXml(sayonaraGuestOrder.id)}</rendelesSzam>
     <fizetve>${toBooleanXml(SZAMLAZZ_SET_PAID)}</fizetve>
   </fejlec>
   <elado />
@@ -2768,6 +2850,85 @@ function getSayonaraInvoiceRecordByOrderId(db, sayonaraOrderId) {
   };
 }
 
+function upsertSayonaraGuestInvoiceRecord(db, payload) {
+  const upsert = db.prepare(`
+    INSERT INTO sayonara_guest_invoice_records (
+      id,
+      sayonara_guest_order_id,
+      provider,
+      status,
+      trigger_source,
+      invoice_number,
+      external_id,
+      net_amount,
+      gross_amount,
+      currency,
+      request_xml,
+      raw_response,
+      error_code,
+      error_message,
+      created_at,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(sayonara_guest_order_id) DO UPDATE SET
+      status = excluded.status,
+      trigger_source = excluded.trigger_source,
+      invoice_number = excluded.invoice_number,
+      external_id = excluded.external_id,
+      net_amount = excluded.net_amount,
+      gross_amount = excluded.gross_amount,
+      currency = excluded.currency,
+      request_xml = excluded.request_xml,
+      raw_response = excluded.raw_response,
+      error_code = excluded.error_code,
+      error_message = excluded.error_message,
+      updated_at = excluded.updated_at
+  `);
+
+  const now = new Date().toISOString();
+  upsert.run(
+    `say_guest_inv_${randomUUID()}`,
+    String(payload.sayonaraGuestOrderId || '').trim(),
+    'szamlazz_hu',
+    String(payload.status || 'FAILED'),
+    String(payload.triggerSource || 'manual'),
+    String(payload.invoiceNumber || ''),
+    String(payload.externalId || ''),
+    roundMoney(payload.netAmount),
+    roundMoney(payload.grossAmount),
+    String(payload.currency || 'EUR'),
+    String(payload.requestXml || ''),
+    String(payload.rawResponse || ''),
+    String(payload.errorCode || ''),
+    String(payload.errorMessage || ''),
+    now,
+    now
+  );
+}
+
+function getSayonaraGuestInvoiceRecordByOrderId(db, sayonaraGuestOrderId) {
+  const row = db.prepare('SELECT * FROM sayonara_guest_invoice_records WHERE sayonara_guest_order_id = ?').get(String(sayonaraGuestOrderId || '').trim());
+  if (!row) return null;
+  return {
+    id: row.id,
+    sayonaraGuestOrderId: row.sayonara_guest_order_id,
+    provider: row.provider,
+    status: row.status,
+    triggerSource: row.trigger_source,
+    invoiceNumber: row.invoice_number || '',
+    externalId: row.external_id || '',
+    netAmount: Number(row.net_amount || 0),
+    grossAmount: Number(row.gross_amount || 0),
+    currency: row.currency || 'EUR',
+    requestXml: row.request_xml || '',
+    rawResponse: row.raw_response || '',
+    errorCode: row.error_code || '',
+    errorMessage: row.error_message || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
 function readInvoiceRecords(db, options = {}) {
   const rawLimit = Number(options.limit || 200);
   const limit = Number.isFinite(rawLimit) && rawLimit >= 1 ? Math.min(Math.floor(rawLimit), 1000) : 200;
@@ -2809,6 +2970,22 @@ function readInvoiceRecords(db, options = {}) {
         r.email AS registration_email
       FROM sayonara_invoice_records i
       LEFT JOIN sayonara_orders s ON s.id = i.sayonara_order_id
+      LEFT JOIN registrations r ON r.id = s.registration_id
+      ORDER BY datetime(i.updated_at) DESC, i.rowid DESC
+      LIMIT ?
+    `)
+    .all(limit);
+
+  const sayonaraGuestRows = db
+    .prepare(`
+      SELECT
+        i.*,
+        s.registration_id,
+        s.guest_full_name,
+        r.full_name AS registration_full_name,
+        r.email AS registration_email
+      FROM sayonara_guest_invoice_records i
+      LEFT JOIN sayonara_guest_orders s ON s.id = i.sayonara_guest_order_id
       LEFT JOIN registrations r ON r.id = s.registration_id
       ORDER BY datetime(i.updated_at) DESC, i.rowid DESC
       LIMIT ?
@@ -2884,8 +3061,32 @@ function readInvoiceRecords(db, options = {}) {
     updatedAt: row.updated_at
   }));
 
+  const mappedSayonaraGuestRows = sayonaraGuestRows.map((row) => ({
+    id: row.id,
+    entityType: 'sayonara_guest_order',
+    entityId: row.sayonara_guest_order_id,
+    registrationId: row.registration_id || '',
+    registrationFullName: row.registration_full_name || '',
+    registrationEmail: row.registration_email || '',
+    guestFullName: row.guest_full_name || '',
+    provider: row.provider,
+    status: row.status,
+    triggerSource: row.trigger_source,
+    invoiceNumber: row.invoice_number || '',
+    externalId: row.external_id || '',
+    netAmount: Number(row.net_amount || 0),
+    grossAmount: Number(row.gross_amount || 0),
+    currency: row.currency || 'EUR',
+    requestXml: row.request_xml || '',
+    rawResponse: row.raw_response || '',
+    errorCode: row.error_code || '',
+    errorMessage: row.error_message || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }));
+
   return mappedRegistrationRows
-    .concat(mappedCateringRows, mappedSayonaraRows)
+    .concat(mappedCateringRows, mappedSayonaraRows, mappedSayonaraGuestRows)
     .sort((left, right) => {
       const leftTime = Date.parse(left.updatedAt || left.createdAt || '') || 0;
       const rightTime = Date.parse(right.updatedAt || right.createdAt || '') || 0;
@@ -3253,6 +3454,115 @@ async function createInvoiceForSayonaraOrder(db, sayonaraOrderId, options = {}) 
         }));
       } catch (storeError) {
         console.error(`Sayonara invoice failure log write failed for ${sayonaraOrder.id}: ${storeError.message}`);
+      }
+    }
+
+    if (Number(error.statusCode)) {
+      throw error;
+    }
+    throw createError(502, `Szamlazz.hu invoice request failed: ${error.message || 'Unknown error'}`);
+  }
+}
+
+async function createInvoiceForSayonaraGuestOrder(db, sayonaraGuestOrderId, options = {}) {
+  if (!isSzamlazzEnabled()) {
+    throw createError(503, 'Szamlazz.hu integration is not configured.');
+  }
+
+  const sayonaraGuestOrder = getSayonaraGuestOrderById(db, sayonaraGuestOrderId);
+  if (!sayonaraGuestOrder) {
+    throw createError(404, 'Sayonara +1 order not found.');
+  }
+  if (sayonaraGuestOrder.status !== 'PAID') {
+    throw createError(400, `Invoice can only be created for PAID Sayonara +1 orders. Current status: ${sayonaraGuestOrder.status}.`);
+  }
+
+  const registration = getRegistrationById(db, sayonaraGuestOrder.registrationId);
+  if (!registration) {
+    throw createError(404, 'Registration not found for Sayonara +1 order.');
+  }
+
+  const existing = getSayonaraGuestInvoiceRecordByOrderId(db, sayonaraGuestOrder.id);
+  if (existing && existing.status === 'SUCCESS' && existing.invoiceNumber) {
+    return { created: false, reused: true, invoice: existing };
+  }
+
+  const triggerSource = String(options.triggerSource || 'manual');
+  const externalId = String(existing?.externalId || buildSzamlazzSayonaraGuestExternalId(sayonaraGuestOrder.id)).trim();
+  const invoiceVatKey = String(options.vatKey || SZAMLAZZ_AFAKULCS).trim() || 'TAM';
+  const invoiceXml = buildSzamlazzInvoiceXmlForSayonaraGuestOrder(registration, sayonaraGuestOrder, {
+    externalId,
+    invoiceDate: options.invoiceDate,
+    dueDate: options.dueDate,
+    vatKey: invoiceVatKey,
+    description: options.description || (sayonaraGuestOrder.guestFullName
+      ? `Sayonara Party +1 guest - ${sayonaraGuestOrder.guestFullName}`
+      : 'Sayonara Party +1 guest')
+  });
+
+  try {
+    const rawResponse = await sendSzamlazzInvoice(invoiceXml);
+    const parsed = parseSzamlazzResponse(rawResponse);
+    if (!parsed.success || !parsed.invoiceNumber) {
+      await runWithSqliteRetry(() => upsertSayonaraGuestInvoiceRecord(db, {
+        sayonaraGuestOrderId: sayonaraGuestOrder.id,
+        status: 'FAILED',
+        triggerSource,
+        invoiceNumber: parsed.invoiceNumber,
+        externalId,
+        netAmount: sayonaraGuestOrder.amount,
+        grossAmount: sayonaraGuestOrder.amount,
+        currency: sayonaraGuestOrder.currency || 'EUR',
+        requestXml: invoiceXml,
+        rawResponse,
+        errorCode: parsed.errorCode || 'missing_invoice_number',
+        errorMessage: parsed.errorMessage || 'Missing invoice number in Szamlazz.hu response.'
+      }));
+      const error = createError(502, 'Szamlazz.hu did not return an invoice number.');
+      error.alreadyStored = true;
+      throw error;
+    }
+
+    const breakdown = calculateVatBreakdown(Number(sayonaraGuestOrder.amount || 0), invoiceVatKey);
+    await runWithSqliteRetry(() => upsertSayonaraGuestInvoiceRecord(db, {
+      sayonaraGuestOrderId: sayonaraGuestOrder.id,
+      status: 'SUCCESS',
+      triggerSource,
+      invoiceNumber: parsed.invoiceNumber,
+      externalId,
+      netAmount: breakdown.net,
+      grossAmount: breakdown.gross,
+      currency: sayonaraGuestOrder.currency || 'EUR',
+      requestXml: invoiceXml,
+      rawResponse,
+      errorCode: '',
+      errorMessage: ''
+    }));
+
+    return {
+      created: true,
+      reused: false,
+      invoice: getSayonaraGuestInvoiceRecordByOrderId(db, sayonaraGuestOrder.id)
+    };
+  } catch (error) {
+    if (!error?.alreadyStored) {
+      try {
+        await runWithSqliteRetry(() => upsertSayonaraGuestInvoiceRecord(db, {
+          sayonaraGuestOrderId: sayonaraGuestOrder.id,
+          status: 'FAILED',
+          triggerSource,
+          invoiceNumber: '',
+          externalId,
+          netAmount: sayonaraGuestOrder.amount,
+          grossAmount: sayonaraGuestOrder.amount,
+          currency: sayonaraGuestOrder.currency || 'EUR',
+          requestXml: invoiceXml,
+          rawResponse: '',
+          errorCode: '',
+          errorMessage: error.message || 'Unknown invoice error'
+        }));
+      } catch (storeError) {
+        console.error(`Sayonara +1 invoice failure log write failed for ${sayonaraGuestOrder.id}: ${storeError.message}`);
       }
     }
 
@@ -3694,6 +4004,65 @@ function initDatabase() {
 
     CREATE INDEX IF NOT EXISTS idx_sayonara_invoice_records_status ON sayonara_invoice_records(status);
     CREATE INDEX IF NOT EXISTS idx_sayonara_invoice_records_order ON sayonara_invoice_records(sayonara_order_id);
+
+    CREATE TABLE IF NOT EXISTS sayonara_guest_orders (
+      id TEXT PRIMARY KEY,
+      registration_id TEXT NOT NULL UNIQUE,
+      guest_full_name TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      status TEXT NOT NULL,
+      spirits_package_count INTEGER NOT NULL DEFAULT 0,
+      amount REAL NOT NULL,
+      currency TEXT NOT NULL,
+      base_price REAL NOT NULL,
+      spirits_package_price REAL NOT NULL,
+      stripe_checkout_session_id TEXT NOT NULL DEFAULT '',
+      stripe_payment_intent_id TEXT NOT NULL DEFAULT '',
+      stripe_customer_id TEXT NOT NULL DEFAULT '',
+      stripe_last_event_type TEXT NOT NULL DEFAULT '',
+      stripe_last_event_at TEXT NOT NULL DEFAULT '',
+      paid_at TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT '',
+      notes TEXT NOT NULL DEFAULT ''
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sayonara_guest_orders_status ON sayonara_guest_orders(status);
+    CREATE INDEX IF NOT EXISTS idx_sayonara_guest_orders_created_at ON sayonara_guest_orders(created_at);
+
+    CREATE TABLE IF NOT EXISTS sayonara_guest_access_tokens (
+      id TEXT PRIMARY KEY,
+      registration_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      used_at TEXT NOT NULL DEFAULT '',
+      revoked_at TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT ''
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sayonara_guest_access_tokens_registration ON sayonara_guest_access_tokens(registration_id);
+
+    CREATE TABLE IF NOT EXISTS sayonara_guest_invoice_records (
+      id TEXT PRIMARY KEY,
+      sayonara_guest_order_id TEXT NOT NULL UNIQUE,
+      provider TEXT NOT NULL,
+      status TEXT NOT NULL,
+      trigger_source TEXT NOT NULL,
+      invoice_number TEXT,
+      external_id TEXT,
+      net_amount REAL,
+      gross_amount REAL,
+      currency TEXT NOT NULL,
+      request_xml TEXT NOT NULL DEFAULT '',
+      raw_response TEXT NOT NULL,
+      error_code TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sayonara_guest_invoice_records_status ON sayonara_guest_invoice_records(status);
+    CREATE INDEX IF NOT EXISTS idx_sayonara_guest_invoice_records_order ON sayonara_guest_invoice_records(sayonara_guest_order_id);
 
     CREATE TABLE IF NOT EXISTS invoice_records (
       id TEXT PRIMARY KEY,
@@ -4703,6 +5072,331 @@ function createSayonaraOrderFromToken(db, plainToken, payload = {}) {
   };
 }
 
+function mapSayonaraGuestOrderRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    registrationId: row.registration_id,
+    guestFullName: row.guest_full_name || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    status: row.status,
+    spiritsPackageCount: Number(row.spirits_package_count || 0),
+    amount: Number(row.amount || 0),
+    currency: row.currency || 'EUR',
+    basePrice: Number(row.base_price || SAYONARA_BASE_PRICE),
+    spiritsPackagePrice: Number(row.spirits_package_price || SAYONARA_SPIRITS_PACKAGE_PRICE),
+    stripeCheckoutSessionId: row.stripe_checkout_session_id || '',
+    stripePaymentIntentId: row.stripe_payment_intent_id || '',
+    stripeCustomerId: row.stripe_customer_id || '',
+    stripeLastEventType: row.stripe_last_event_type || '',
+    stripeLastEventAt: row.stripe_last_event_at || '',
+    paidAt: row.paid_at || '',
+    source: row.source || '',
+    notes: row.notes || ''
+  };
+}
+
+function getSayonaraGuestOrderById(db, sayonaraGuestOrderId) {
+  const row = db.prepare('SELECT * FROM sayonara_guest_orders WHERE id = ?').get(String(sayonaraGuestOrderId || '').trim());
+  return mapSayonaraGuestOrderRow(row);
+}
+
+function getSayonaraGuestOrderByRegistrationId(db, registrationId) {
+  const row = db.prepare('SELECT * FROM sayonara_guest_orders WHERE registration_id = ?').get(String(registrationId || '').trim());
+  return mapSayonaraGuestOrderRow(row);
+}
+
+function getSayonaraGuestOrderByStripeCheckoutSessionId(db, sessionId) {
+  const row = db.prepare('SELECT * FROM sayonara_guest_orders WHERE stripe_checkout_session_id = ?').get(String(sessionId || '').trim());
+  return mapSayonaraGuestOrderRow(row);
+}
+
+function insertSayonaraGuestOrder(db, order) {
+  const insert = db.prepare(`
+    INSERT INTO sayonara_guest_orders (
+      id, registration_id, guest_full_name, created_at, updated_at, status,
+      spirits_package_count, amount, currency, base_price, spirits_package_price,
+      stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id, stripe_last_event_type, stripe_last_event_at, paid_at,
+      source, notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  insert.run(
+    order.id,
+    order.registrationId,
+    String(order.guestFullName || ''),
+    order.createdAt,
+    order.updatedAt,
+    order.status,
+    Number(order.spiritsPackageCount || 0),
+    Number(order.amount || 0),
+    String(order.currency || 'EUR'),
+    Number(order.basePrice || SAYONARA_BASE_PRICE),
+    Number(order.spiritsPackagePrice || SAYONARA_SPIRITS_PACKAGE_PRICE),
+    String(order.stripeCheckoutSessionId || ''),
+    String(order.stripePaymentIntentId || ''),
+    String(order.stripeCustomerId || ''),
+    String(order.stripeLastEventType || ''),
+    String(order.stripeLastEventAt || ''),
+    String(order.paidAt || ''),
+    String(order.source || ''),
+    String(order.notes || '')
+  );
+}
+
+function updateSayonaraGuestOrderStripeTracking(db, sayonaraGuestOrderId, tracking = {}) {
+  const current = getSayonaraGuestOrderById(db, sayonaraGuestOrderId);
+  if (!current) return 0;
+
+  const update = db.prepare(`
+    UPDATE sayonara_guest_orders
+    SET
+      updated_at = ?,
+      stripe_checkout_session_id = ?,
+      stripe_payment_intent_id = ?,
+      stripe_customer_id = ?,
+      stripe_last_event_type = ?,
+      stripe_last_event_at = ?,
+      paid_at = ?
+    WHERE id = ?
+  `);
+
+  const result = update.run(
+    new Date().toISOString(),
+    String(tracking.checkoutSessionId || current.stripeCheckoutSessionId || '').trim(),
+    String(tracking.paymentIntentId || current.stripePaymentIntentId || '').trim(),
+    String(tracking.customerId || current.stripeCustomerId || '').trim(),
+    String(tracking.lastEventType || current.stripeLastEventType || '').trim(),
+    String(tracking.lastEventAt || current.stripeLastEventAt || '').trim(),
+    String(tracking.paidAt || current.paidAt || '').trim(),
+    String(sayonaraGuestOrderId || '').trim()
+  );
+
+  return Number(result.changes || 0);
+}
+
+function updateSayonaraGuestOrderStatus(db, sayonaraGuestOrderId, status, options = {}) {
+  const normalizedStatus = String(status || '').trim();
+  const safeId = String(sayonaraGuestOrderId || '').trim();
+  const current = getSayonaraGuestOrderById(db, safeId);
+  if (!current) return 0;
+  if (current.status === normalizedStatus) return 0;
+
+  const update = db.prepare(`
+    UPDATE sayonara_guest_orders
+    SET
+      status = ?,
+      updated_at = ?,
+      paid_at = CASE
+        WHEN ? = 'PAID' AND COALESCE(paid_at, '') = '' THEN ?
+        ELSE paid_at
+      END
+    WHERE id = ?
+  `);
+  const paidAt = String(options.paidAt || new Date().toISOString()).trim();
+  const result = update.run(normalizedStatus, new Date().toISOString(), normalizedStatus, paidAt, safeId);
+  return Number(result.changes || 0);
+}
+
+function readSayonaraGuestOrders(db) {
+  const rows = db.prepare('SELECT * FROM sayonara_guest_orders ORDER BY datetime(created_at) ASC, rowid ASC').all();
+  return rows.map(mapSayonaraGuestOrderRow);
+}
+
+function mapSayonaraGuestAccessTokenRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    registrationId: row.registration_id,
+    tokenHash: row.token_hash,
+    createdAt: row.created_at,
+    usedAt: row.used_at || '',
+    revokedAt: row.revoked_at || '',
+    createdBy: row.created_by || ''
+  };
+}
+
+function getLatestSayonaraGuestAccessTokenByRegistrationId(db, registrationId) {
+  const row = db.prepare(`
+    SELECT * FROM sayonara_guest_access_tokens
+    WHERE registration_id = ?
+    ORDER BY datetime(created_at) DESC, rowid DESC
+    LIMIT 1
+  `).get(String(registrationId || '').trim());
+  return mapSayonaraGuestAccessTokenRow(row);
+}
+
+function getSayonaraGuestAccessTokenByPlainToken(db, token) {
+  const tokenHash = hashOpaqueToken(token);
+  const row = db.prepare('SELECT * FROM sayonara_guest_access_tokens WHERE token_hash = ?').get(tokenHash);
+  return mapSayonaraGuestAccessTokenRow(row);
+}
+
+function isRegistrationEligibleForSayonaraGuestInvite(registration, options = {}) {
+  const status = String(registration?.status || '').trim();
+  const email = String(registration?.email || '').trim();
+  const hasMainSayonaraSelection = Boolean(registration?.sayonaraAttending);
+  const standardSayonaraOrder = options.standardSayonaraOrder || null;
+  const guestSayonaraOrder = options.guestSayonaraOrder || null;
+  const hasPaidStandardSayonaraOrder = Boolean(standardSayonaraOrder && String(standardSayonaraOrder.status || '').trim() === 'PAID');
+  return status === 'PAID' && email.length > 0 && !guestSayonaraOrder && (hasMainSayonaraSelection || hasPaidStandardSayonaraOrder);
+}
+
+function generateSayonaraGuestAccessTokenValue() {
+  return `say_guest_${randomUUID()}_${randomBytes(24).toString('hex')}`;
+}
+
+function buildSayonaraGuestAccessUrl(token) {
+  return `${APP_BASE_URL}/sayonara-plus-one-registration?token=${encodeURIComponent(String(token || '').trim())}`;
+}
+
+function createSayonaraGuestAccessToken(db, registrationId, createdBy = 'admin') {
+  const registration = getRegistrationById(db, registrationId);
+  if (!registration) {
+    throw createError(404, 'Registration not found.');
+  }
+
+  const standardOrder = getSayonaraOrderByRegistrationId(db, registrationId);
+  const existingGuestOrder = getSayonaraGuestOrderByRegistrationId(db, registrationId);
+  if (!isRegistrationEligibleForSayonaraGuestInvite(registration, {
+    standardSayonaraOrder: standardOrder,
+    guestSayonaraOrder: existingGuestOrder
+  })) {
+    throw createError(400, 'Sayonara +1 invitation is not available for this registration.');
+  }
+
+  const existingToken = getLatestSayonaraGuestAccessTokenByRegistrationId(db, registrationId);
+  if (existingToken && !existingToken.usedAt && !existingToken.revokedAt) {
+    db.prepare('UPDATE sayonara_guest_access_tokens SET revoked_at = ? WHERE id = ?')
+      .run(new Date().toISOString(), existingToken.id);
+  }
+
+  const plainToken = generateSayonaraGuestAccessTokenValue();
+  const record = {
+    id: `say_guest_token_${randomUUID()}`,
+    registrationId: String(registrationId || '').trim(),
+    tokenHash: hashOpaqueToken(plainToken),
+    createdAt: new Date().toISOString(),
+    usedAt: '',
+    revokedAt: '',
+    createdBy: String(createdBy || 'admin')
+  };
+
+  db.prepare(`
+    INSERT INTO sayonara_guest_access_tokens (
+      id, registration_id, token_hash, created_at, used_at, revoked_at, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(record.id, record.registrationId, record.tokenHash, record.createdAt, '', '', record.createdBy);
+
+  return {
+    token: plainToken,
+    url: buildSayonaraGuestAccessUrl(plainToken),
+    record
+  };
+}
+
+function markSayonaraGuestAccessTokenUsed(db, tokenId) {
+  const result = db.prepare(`
+    UPDATE sayonara_guest_access_tokens
+    SET used_at = CASE WHEN COALESCE(used_at, '') = '' THEN ? ELSE used_at END
+    WHERE id = ?
+  `).run(new Date().toISOString(), String(tokenId || '').trim());
+  return Number(result.changes || 0);
+}
+
+function getSayonaraGuestAccessState(db, plainToken) {
+  const token = getSayonaraGuestAccessTokenByPlainToken(db, plainToken);
+  if (!token || token.revokedAt) {
+    return { state: 'invalid', token: null, registration: null, sayonaraGuestOrder: null };
+  }
+
+  const registration = getRegistrationById(db, token.registrationId);
+  if (!registration || registration.status === 'DELETED' || registration.status === 'ANONYMIZED') {
+    return { state: 'invalid', token, registration: null, sayonaraGuestOrder: null };
+  }
+
+  const sayonaraGuestOrder = getSayonaraGuestOrderByRegistrationId(db, token.registrationId);
+  if (sayonaraGuestOrder) {
+    return {
+      state: sayonaraGuestOrder.status === 'PAID' ? 'settled' : 'registered_unpaid',
+      token,
+      registration,
+      sayonaraGuestOrder
+    };
+  }
+
+  if (token.usedAt) {
+    return { state: 'invalid', token, registration, sayonaraGuestOrder: null };
+  }
+
+  return { state: 'ready', token, registration, sayonaraGuestOrder: null };
+}
+
+function createSayonaraGuestOrderFromToken(db, plainToken, payload = {}) {
+  const access = getSayonaraGuestAccessState(db, plainToken);
+  if (access.state !== 'ready' || !access.token || !access.registration) {
+    throw createError(400, 'This Sayonara +1 registration link is invalid or already used.');
+  }
+
+  const standardOrder = getSayonaraOrderByRegistrationId(db, access.registration.id);
+  const eligibility = isRegistrationEligibleForSayonaraGuestInvite(access.registration, {
+    standardSayonaraOrder: standardOrder,
+    guestSayonaraOrder: access.sayonaraGuestOrder
+  });
+  if (!eligibility) {
+    throw createError(400, 'Sayonara +1 registration is not available for this seminar registration.');
+  }
+
+  const guestFullName = String(payload.guestFullName || '').trim();
+  if (!guestFullName) {
+    throw createError(400, 'Guest full name is required.');
+  }
+  if (guestFullName.length > 200) {
+    throw createError(400, 'Guest full name cannot exceed 200 characters.');
+  }
+
+  const spiritsPackageCount = normalizeSayonaraSpiritsPackageCount(payload.spiritsPackageCount);
+  const now = new Date().toISOString();
+  const order = {
+    id: `sayonara_guest_${randomUUID()}`,
+    registrationId: access.registration.id,
+    guestFullName,
+    createdAt: now,
+    updatedAt: now,
+    status: 'PENDING_PAYMENT',
+    spiritsPackageCount,
+    amount: getSayonaraAmount(true, spiritsPackageCount),
+    currency: 'EUR',
+    basePrice: SAYONARA_BASE_PRICE,
+    spiritsPackagePrice: SAYONARA_SPIRITS_PACKAGE_PRICE,
+    stripeCheckoutSessionId: '',
+    stripePaymentIntentId: '',
+    stripeCustomerId: '',
+    stripeLastEventType: '',
+    stripeLastEventAt: '',
+    paidAt: '',
+    source: 'guest_token_registration',
+    notes: ''
+  };
+
+  db.exec('BEGIN');
+  try {
+    insertSayonaraGuestOrder(db, order);
+    markSayonaraGuestAccessTokenUsed(db, access.token.id);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+
+  return {
+    token: access.token,
+    registration: access.registration,
+    order
+  };
+}
+
 function updateRegistrationStripeTracking(db, registrationId, tracking = {}) {
   const current = getRegistrationById(db, registrationId);
   if (!current) return 0;
@@ -5010,6 +5704,97 @@ async function createCheckoutSessionForSayonaraOrder(db, sayonaraOrderId, option
   return { registration, sayonaraOrder, session };
 }
 
+async function createStripeCheckoutSessionForSayonaraGuestOrder(registration, sayonaraGuestOrder, options = {}) {
+  if (!isStripeEnabled()) {
+    throw createError(503, 'Stripe is not configured. Missing STRIPE_SECRET_KEY.');
+  }
+
+  const currency = String(sayonaraGuestOrder.currency || 'EUR').toLowerCase();
+  const amountMinor = toStripeMinorUnits(sayonaraGuestOrder.amount || 0, sayonaraGuestOrder.currency || 'EUR');
+  const packages = Number(sayonaraGuestOrder.spiritsPackageCount || 0);
+  const guestLabel = String(sayonaraGuestOrder.guestFullName || '').trim();
+  const descriptionBase = guestLabel ? `Sayonara Party +1 guest (${guestLabel})` : 'Sayonara Party +1 guest';
+  const description = packages > 0
+    ? `${descriptionBase} + ${packages} pálinka coupon package${packages === 1 ? '' : 's'}`
+    : descriptionBase;
+  const successUrl = buildStripeSuccessUrlForSayonaraGuest(String(options.successUrl || STRIPE_SUCCESS_URL).trim(), sayonaraGuestOrder.id);
+  const cancelUrl = String(
+    options.cancelUrl || `${APP_BASE_URL}/sayonara-plus-one-registration?state=unpaid&order_id=${encodeURIComponent(sayonaraGuestOrder.id)}`
+  ).trim();
+
+  const formBody = createStripeFormBody({
+    mode: 'payment',
+    success_url: successUrl,
+    cancel_url: cancelUrl,
+    customer_email: registration.email,
+    client_reference_id: sayonaraGuestOrder.id,
+    'metadata[entity_type]': 'sayonara_guest_order',
+    'metadata[sayonara_guest_order_id]': sayonaraGuestOrder.id,
+    'metadata[registration_id]': registration.id,
+    'metadata[source]': options.source || 'sayonara_guest',
+    'line_items[0][quantity]': 1,
+    'line_items[0][price_data][currency]': currency,
+    'line_items[0][price_data][unit_amount]': amountMinor,
+    'line_items[0][price_data][product_data][name]': 'Sayonara Party +1 guest',
+    'line_items[0][price_data][product_data][description]': description
+  });
+
+  const response = await fetch(`${STRIPE_API_BASE_URL}/checkout/sessions`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${STRIPE_SECRET_KEY}`,
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body: formBody,
+    signal: AbortSignal.timeout(STRIPE_REQUEST_TIMEOUT_MS)
+  });
+
+  const raw = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    const stripeMessage = payload?.error?.message || raw || 'Stripe API request failed.';
+    throw createError(response.status >= 400 && response.status < 500 ? 400 : 502, `Stripe session creation failed: ${stripeMessage}`);
+  }
+
+  const checkoutUrl = String(payload?.url || '').trim();
+  const sessionId = String(payload?.id || '').trim();
+  if (!checkoutUrl || !sessionId) {
+    throw createError(502, 'Stripe response did not include checkout URL.');
+  }
+
+  return { id: sessionId, url: checkoutUrl };
+}
+
+async function createCheckoutSessionForSayonaraGuestOrder(db, sayonaraGuestOrderId, options = {}) {
+  const sayonaraGuestOrder = getSayonaraGuestOrderById(db, sayonaraGuestOrderId);
+  if (!sayonaraGuestOrder) {
+    throw createError(404, 'Sayonara +1 order not found.');
+  }
+  if (sayonaraGuestOrder.status === 'PAID') {
+    throw createError(400, 'Sayonara +1 order is already paid.');
+  }
+
+  const registration = getRegistrationById(db, sayonaraGuestOrder.registrationId);
+  if (!registration) {
+    throw createError(404, 'Registration not found for Sayonara +1 order.');
+  }
+
+  const session = await createStripeCheckoutSessionForSayonaraGuestOrder(registration, sayonaraGuestOrder, options);
+  await runWithSqliteRetry(() => updateSayonaraGuestOrderStripeTracking(db, sayonaraGuestOrder.id, {
+    checkoutSessionId: session.id,
+    lastEventType: 'checkout.session.created',
+    lastEventAt: new Date().toISOString()
+  }));
+
+  return { registration, sayonaraGuestOrder, session };
+}
+
 function syncCateringOrderFromStripeSession(db, session, options = {}) {
   const eventType = String(options.eventType || '').trim();
   const eventCreatedAt = String(options.eventCreatedAt || '').trim() || new Date().toISOString();
@@ -5091,6 +5876,51 @@ function syncSayonaraOrderFromStripeSession(db, session, options = {}) {
 
   return {
     sayonaraOrderId,
+    found: true,
+    paid,
+    statusChanged,
+    checkoutSessionId: identifiers.checkoutSessionId,
+    paymentIntentId: identifiers.paymentIntentId,
+    customerId: identifiers.customerId
+  };
+}
+
+function syncSayonaraGuestOrderFromStripeSession(db, session, options = {}) {
+  const eventType = String(options.eventType || '').trim();
+  const eventCreatedAt = String(options.eventCreatedAt || '').trim() || new Date().toISOString();
+  const identifiers = extractStripeSessionIdentifiers(session);
+
+  let sayonaraGuestOrderId = extractSayonaraGuestOrderIdFromStripeSession(session);
+  if (!sayonaraGuestOrderId && identifiers.checkoutSessionId) {
+    const bySession = getSayonaraGuestOrderByStripeCheckoutSessionId(db, identifiers.checkoutSessionId);
+    sayonaraGuestOrderId = bySession?.id || '';
+  }
+  if (!sayonaraGuestOrderId) {
+    return { sayonaraGuestOrderId: '', found: false, paid: isStripeSessionPaid(session, eventType), statusChanged: false };
+  }
+
+  const existing = getSayonaraGuestOrderById(db, sayonaraGuestOrderId);
+  if (!existing) {
+    return { sayonaraGuestOrderId: '', found: false, paid: isStripeSessionPaid(session, eventType), statusChanged: false };
+  }
+
+  updateSayonaraGuestOrderStripeTracking(db, sayonaraGuestOrderId, {
+    checkoutSessionId: identifiers.checkoutSessionId,
+    paymentIntentId: identifiers.paymentIntentId,
+    customerId: identifiers.customerId,
+    lastEventType: eventType,
+    lastEventAt: eventCreatedAt,
+    paidAt: isStripeSessionPaid(session, eventType) ? eventCreatedAt : ''
+  });
+
+  const paid = isStripeSessionPaid(session, eventType);
+  let statusChanged = false;
+  if (paid) {
+    statusChanged = updateSayonaraGuestOrderStatus(db, sayonaraGuestOrderId, 'PAID', { paidAt: eventCreatedAt }) > 0;
+  }
+
+  return {
+    sayonaraGuestOrderId,
     found: true,
     paid,
     statusChanged,
@@ -5320,6 +6150,20 @@ function hardDeleteRegistration(db, registrationId) {
     const deleteSayonaraOrders = db.prepare('DELETE FROM sayonara_orders WHERE registration_id = ?');
     deleteSayonaraOrders.run(safeRegistrationId);
 
+    const deleteSayonaraGuestInvoiceRecord = db.prepare(`
+      DELETE FROM sayonara_guest_invoice_records
+      WHERE sayonara_guest_order_id IN (
+        SELECT id FROM sayonara_guest_orders WHERE registration_id = ?
+      )
+    `);
+    deleteSayonaraGuestInvoiceRecord.run(safeRegistrationId);
+
+    const deleteSayonaraGuestAccessTokens = db.prepare('DELETE FROM sayonara_guest_access_tokens WHERE registration_id = ?');
+    deleteSayonaraGuestAccessTokens.run(safeRegistrationId);
+
+    const deleteSayonaraGuestOrders = db.prepare('DELETE FROM sayonara_guest_orders WHERE registration_id = ?');
+    deleteSayonaraGuestOrders.run(safeRegistrationId);
+
     const deleteInvoiceRecord = db.prepare('DELETE FROM invoice_records WHERE registration_id = ?');
     deleteInvoiceRecord.run(safeRegistrationId);
 
@@ -5385,6 +6229,36 @@ function deleteSayonaraOrder(db, sayonaraOrderId, options = {}) {
     }
 
     const result = db.prepare('DELETE FROM sayonara_orders WHERE id = ?').run(safeSayonaraOrderId);
+
+    db.exec('COMMIT');
+    return Number(result.changes || 0);
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+function deleteSayonaraGuestOrder(db, sayonaraGuestOrderId, options = {}) {
+  const safeSayonaraGuestOrderId = String(sayonaraGuestOrderId || '').trim();
+  if (!safeSayonaraGuestOrderId) return 0;
+
+  const order = getSayonaraGuestOrderById(db, safeSayonaraGuestOrderId);
+  if (!order) return 0;
+  if (order.status === 'PAID') {
+    throw createError(400, 'Paid Sayonara +1 orders cannot be deleted.');
+  }
+
+  const shouldDeleteTokens = options.deleteAccessTokens !== false;
+
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM sayonara_guest_invoice_records WHERE sayonara_guest_order_id = ?').run(safeSayonaraGuestOrderId);
+
+    if (shouldDeleteTokens) {
+      db.prepare('DELETE FROM sayonara_guest_access_tokens WHERE registration_id = ?').run(order.registrationId);
+    }
+
+    const result = db.prepare('DELETE FROM sayonara_guest_orders WHERE id = ?').run(safeSayonaraGuestOrderId);
 
     db.exec('COMMIT');
     return Number(result.changes || 0);
@@ -6004,7 +6878,7 @@ function buildCombinedCateringCsvExport(registrations, cateringOrders) {
   return `\uFEFF${csvRows.join('\n')}\n`;
 }
 
-function buildCombinedSayonaraCsvExport(registrations, sayonaraOrders) {
+function buildCombinedSayonaraCsvExport(registrations, sayonaraOrders, sayonaraGuestOrders = []) {
   const headers = [
     'source_type',
     'source_id',
@@ -6014,6 +6888,8 @@ function buildCombinedSayonaraCsvExport(registrations, sayonaraOrders) {
     'full_name',
     'email',
     'camp_type',
+    'order_kind',
+    'guest_full_name',
     'sayonara_attending',
     'sayonara_food_notes',
     'sayonara_spirits_package_count',
@@ -6038,6 +6914,8 @@ function buildCombinedSayonaraCsvExport(registrations, sayonaraOrders) {
       registration.fullName,
       registration.email,
       registration.campType,
+      'standard_registration',
+      '',
       'yes',
       registration.sayonaraFoodNotes || '',
       registration.sayonaraSpiritsPackageCount,
@@ -6062,8 +6940,35 @@ function buildCombinedSayonaraCsvExport(registrations, sayonaraOrders) {
       registration.fullName || '',
       registration.email || '',
       registration.campType || '',
+      'standard_order',
+      '',
       order.attending ? 'yes' : 'no',
       order.foodNotes || '',
+      order.spiritsPackageCount,
+      order.amount,
+      order.currency,
+      order.paidAt,
+      order.createdAt,
+      order.updatedAt
+    ];
+    csvRows.push(row.map(escapeCsvValue).join(','));
+  }
+
+  for (const order of sayonaraGuestOrders) {
+    const registration = registrationsById.get(order.registrationId) || {};
+    const row = [
+      'sayonara_guest_order',
+      order.id,
+      order.registrationId,
+      registration.status || '',
+      order.status,
+      registration.fullName || '',
+      registration.email || '',
+      registration.campType || '',
+      'plus_one_guest',
+      order.guestFullName || '',
+      'yes',
+      '',
       order.spiritsPackageCount,
       order.amount,
       order.currency,
@@ -6124,19 +7029,53 @@ function buildAdminCateringOrderRows(db) {
 function buildAdminSayonaraOrderRows(db) {
   const registrations = readRegistrations(db);
   const registrationsById = new Map(registrations.map((item) => [item.id, item]));
-  const orders = readSayonaraOrders(db);
-  return orders.map((order) => {
+  const standardOrders = readSayonaraOrders(db);
+  const guestOrders = readSayonaraGuestOrders(db);
+  const guestOrdersByRegistrationId = new Map(guestOrders.map((item) => [item.registrationId, item]));
+
+  const standardRows = standardOrders.map((order) => {
     const registration = registrationsById.get(order.registrationId) || null;
     const invoice = getSayonaraInvoiceRecordByOrderId(db, order.id);
     return {
       ...order,
+      entityType: 'sayonara_order',
+      orderKind: 'standard',
       registrationFullName: registration?.fullName || '',
       registrationEmail: registration?.email || '',
       campType: registration?.campType || '',
       invoiceStatus: invoice?.status || '',
-      invoiceNumber: invoice?.invoiceNumber || ''
+      invoiceNumber: invoice?.invoiceNumber || '',
+      guestFullName: '',
+      canSendGuestInvite: isRegistrationEligibleForSayonaraGuestInvite(registration, {
+        standardSayonaraOrder: order,
+        guestSayonaraOrder: guestOrdersByRegistrationId.get(order.registrationId) || null
+      })
     };
   });
+
+  const guestRows = guestOrders.map((order) => {
+    const registration = registrationsById.get(order.registrationId) || null;
+    const invoice = getSayonaraGuestInvoiceRecordByOrderId(db, order.id);
+    return {
+      ...order,
+      entityType: 'sayonara_guest_order',
+      orderKind: 'plus_one_guest',
+      registrationFullName: registration?.fullName || '',
+      registrationEmail: registration?.email || '',
+      campType: registration?.campType || '',
+      invoiceStatus: invoice?.status || '',
+      invoiceNumber: invoice?.invoiceNumber || '',
+      canSendGuestInvite: false
+    };
+  });
+
+  return standardRows
+    .concat(guestRows)
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.createdAt || '') || 0;
+      const rightTime = Date.parse(right.createdAt || '') || 0;
+      return leftTime - rightTime;
+    });
 }
 
 function parseCookies(req) {
@@ -6492,6 +7431,44 @@ function buildSayonaraRetryPaymentUrl(token) {
   return `${APP_BASE_URL}/retry-sayonara-payment?token=${encodeURIComponent(String(token || '').trim())}`;
 }
 
+function buildSayonaraGuestRetryPaymentToken(sayonaraGuestOrderId) {
+  const exp = Math.floor(Date.now() / 1000) + RETRY_PAYMENT_LINK_TTL_SECONDS;
+  const payload = {
+    purpose: 'retry_sayonara_guest_payment',
+    sayonaraGuestOrderId: String(sayonaraGuestOrderId || '').trim(),
+    exp,
+    nonce: randomUUID()
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = signRetryPaymentPayload(`sayonara-guest:${encodedPayload}`);
+  return {
+    token: `${encodedPayload}.${signature}`,
+    expiresAt: new Date(exp * 1000).toISOString()
+  };
+}
+
+function verifySayonaraGuestRetryPaymentToken(token) {
+  const raw = String(token || '').trim();
+  if (!raw) return null;
+  const [encodedPayload, signature] = raw.split('.');
+  if (!encodedPayload || !signature) return null;
+  const expected = signRetryPaymentPayload(`sayonara-guest:${encodedPayload}`);
+  if (!safeEqualStrings(signature, expected)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+    if (payload.purpose !== 'retry_sayonara_guest_payment') return null;
+    if (typeof payload.sayonaraGuestOrderId !== 'string' || payload.sayonaraGuestOrderId.trim().length === 0) return null;
+    if (!Number.isFinite(payload.exp) || payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function buildSayonaraGuestRetryPaymentUrl(token) {
+  return `${APP_BASE_URL}/retry-sayonara-guest-payment?token=${encodeURIComponent(String(token || '').trim())}`;
+}
+
 function buildSayonaraRetryPaymentEmailMessage(registration, sayonaraOrder, retryUrl, expiresAtIso) {
   const fullName = String(registration?.fullName || '').trim() || 'Participant';
   const expiresAtText = expiresAtIso ? new Date(expiresAtIso).toLocaleString('en-GB') : '';
@@ -6544,6 +7521,94 @@ function buildSayonaraPaymentConfirmationEmailMessage(registration, sayonaraOrde
     <p>Dear ${escapeHtml(fullName)},</p>
     <p>Your Sayonara Party registration has been confirmed and your payment has been received.</p>
     <p><strong>Optional package:</strong> ${escapeHtml(packageText)}<br /><strong>Total paid:</strong> ${escapeHtml(formatCurrency(sayonaraOrder.amount, sayonaraOrder.currency || 'EUR'))}</p>
+    <p>Best regards,<br />The Organizing Team</p>
+  `;
+  return { subject, text, html };
+}
+
+function buildSayonaraGuestInvitationEmailMessage(registration, inviteUrl) {
+  const fullName = String(registration?.fullName || '').trim() || 'Participant';
+  const subject = 'Sayonara Party +1 registration - Ishido Sensei Summer Seminar 2026';
+  const text = [
+    `Dear ${fullName},`,
+    '',
+    'If you would like to bring one additional guest to the Saturday evening Sayonara Party, please use your personal link below to register that guest:',
+    inviteUrl,
+    '',
+    `Sayonara Party guest price: ${formatCurrency(SAYONARA_BASE_PRICE, 'EUR')} per person.`,
+    `Optional pálinka coupon package: ${formatCurrency(SAYONARA_SPIRITS_PACKAGE_PRICE, 'EUR')} per package (10 shots).`,
+    '',
+    'Best regards,',
+    'The Organizing Team'
+  ].join('\n');
+  const html = `
+    <h2>Sayonara Party +1 registration</h2>
+    <p>Dear ${escapeHtml(fullName)},</p>
+    <p>If you would like to bring one additional guest to the Saturday evening Sayonara Party, please use your personal link below to register that guest:</p>
+    <p><a href="${escapeHtml(inviteUrl)}">${escapeHtml(inviteUrl)}</a></p>
+    <p><strong>Sayonara Party guest price:</strong> ${escapeHtml(formatCurrency(SAYONARA_BASE_PRICE, 'EUR'))} per person.<br />
+    <strong>Optional pálinka coupon package:</strong> ${escapeHtml(formatCurrency(SAYONARA_SPIRITS_PACKAGE_PRICE, 'EUR'))} per package (10 shots).</p>
+    <p>Best regards,<br />The Organizing Team</p>
+  `;
+  return { subject, text, html };
+}
+
+function buildSayonaraGuestRetryPaymentEmailMessage(registration, sayonaraGuestOrder, retryUrl, expiresAtIso) {
+  const fullName = String(registration?.fullName || '').trim() || 'Participant';
+  const expiresAtText = expiresAtIso ? new Date(expiresAtIso).toLocaleString('en-GB') : '';
+  const guestLabel = String(sayonaraGuestOrder?.guestFullName || '').trim();
+  const subject = `Sayonara Party +1 payment link - ${sayonaraGuestOrder.id}`;
+  const textLines = [
+    `Dear ${fullName},`,
+    '',
+    'Your Sayonara Party +1 registration was saved, but the payment has not been completed yet.',
+    'Please use the secure payment link below to complete the payment for your Sayonara Party guest booking:',
+    retryUrl,
+    '',
+    `Order ID: ${sayonaraGuestOrder.id}`,
+    guestLabel ? `Guest name: ${guestLabel}` : '',
+    `Amount Due: ${formatCurrency(sayonaraGuestOrder.amount, sayonaraGuestOrder.currency || 'EUR')}`
+  ].filter(Boolean);
+  if (expiresAtText) {
+    textLines.push(`Link Expires At: ${expiresAtText}`);
+  }
+  textLines.push('', 'Best regards,', 'The Organizing Team');
+  const text = textLines.join('\n');
+  const html = `
+    <h2>Sayonara Party +1 payment link</h2>
+    <p>Dear ${escapeHtml(fullName)},</p>
+    <p>Your Sayonara Party +1 registration was saved, but the payment has not been completed yet.</p>
+    <p>Please use the secure payment link below to complete the payment for your Sayonara Party guest booking:</p>
+    <p><a href="${escapeHtml(retryUrl)}">${escapeHtml(retryUrl)}</a></p>
+    <p><strong>Order ID:</strong> ${escapeHtml(sayonaraGuestOrder.id)}${guestLabel ? `<br /><strong>Guest name:</strong> ${escapeHtml(guestLabel)}` : ''}<br /><strong>Amount Due:</strong> ${escapeHtml(formatCurrency(sayonaraGuestOrder.amount, sayonaraGuestOrder.currency || 'EUR'))}${expiresAtText ? `<br /><strong>Link Expires At:</strong> ${escapeHtml(expiresAtText)}` : ''}</p>
+    <p>Best regards,<br />The Organizing Team</p>
+  `;
+  return { subject, text, html };
+}
+
+function buildSayonaraGuestPaymentConfirmationEmailMessage(registration, sayonaraGuestOrder) {
+  const fullName = String(registration?.fullName || '').trim() || 'Participant';
+  const packageText = Number(sayonaraGuestOrder.spiritsPackageCount || 0) > 0
+    ? `${sayonaraGuestOrder.spiritsPackageCount} pálinka coupon package(s)`
+    : 'No additional pálinka coupon package';
+  const guestLabel = String(sayonaraGuestOrder.guestFullName || '').trim();
+  const subject = 'Sayonara Party +1 registration confirmed - Ishido Sensei Summer Seminar 2026';
+  const text = [
+    `Dear ${fullName},`,
+    '',
+    'Your Sayonara Party +1 registration has been confirmed and your payment has been received.',
+    guestLabel ? `Guest name: ${guestLabel}` : '',
+    `Optional package: ${packageText}`,
+    `Total paid: ${formatCurrency(sayonaraGuestOrder.amount, sayonaraGuestOrder.currency || 'EUR')}`,
+    '',
+    'Best regards,',
+    'The Organizing Team'
+  ].filter(Boolean).join('\n');
+  const html = `
+    <h2>Sayonara Party +1 registration confirmed</h2>
+    <p>Dear ${escapeHtml(fullName)},</p>
+    <p>Your Sayonara Party +1 registration has been confirmed and your payment has been received.</p>
+    <p>${guestLabel ? `<strong>Guest name:</strong> ${escapeHtml(guestLabel)}<br />` : ''}<strong>Optional package:</strong> ${escapeHtml(packageText)}<br /><strong>Total paid:</strong> ${escapeHtml(formatCurrency(sayonaraGuestOrder.amount, sayonaraGuestOrder.currency || 'EUR'))}</p>
     <p>Best regards,<br />The Organizing Team</p>
   `;
   return { subject, text, html };
@@ -6634,6 +7699,21 @@ async function sendSayonaraInvitationEmail(registration, inviteUrl) {
   });
 }
 
+async function sendSayonaraGuestInvitationEmail(registration, inviteUrl) {
+  if (!isSmtpEnabled()) {
+    throw createError(503, 'Email sending is not configured. Set SMTP env values first.');
+  }
+
+  const message = buildSayonaraGuestInvitationEmailMessage(registration, inviteUrl);
+  await sendSmtpEmail({
+    toEmail: registration.email,
+    toName: registration.fullName,
+    subject: message.subject,
+    textContent: message.text,
+    htmlContent: message.html
+  });
+}
+
 async function sendSayonaraRetryPaymentEmail(registration, sayonaraOrder) {
   if (!isSmtpEnabled()) {
     throw createError(503, 'Email sending is not configured. Set SMTP env values first.');
@@ -6652,11 +7732,44 @@ async function sendSayonaraRetryPaymentEmail(registration, sayonaraOrder) {
   return { expiresAt: retry.expiresAt };
 }
 
+async function sendSayonaraGuestRetryPaymentEmail(registration, sayonaraGuestOrder) {
+  if (!isSmtpEnabled()) {
+    throw createError(503, 'Email sending is not configured. Set SMTP env values first.');
+  }
+
+  const retry = buildSayonaraGuestRetryPaymentToken(sayonaraGuestOrder.id);
+  const retryUrl = buildSayonaraGuestRetryPaymentUrl(retry.token);
+  const message = buildSayonaraGuestRetryPaymentEmailMessage(registration, sayonaraGuestOrder, retryUrl, retry.expiresAt);
+  await sendSmtpEmail({
+    toEmail: registration.email,
+    toName: registration.fullName,
+    subject: message.subject,
+    textContent: message.text,
+    htmlContent: message.html
+  });
+  return { expiresAt: retry.expiresAt };
+}
+
 async function sendSayonaraPaymentConfirmationEmail(registration, sayonaraOrder) {
   if (!isSmtpEnabled()) {
     return { enabled: false };
   }
   const message = buildSayonaraPaymentConfirmationEmailMessage(registration, sayonaraOrder);
+  await sendSmtpEmail({
+    toEmail: registration.email,
+    toName: registration.fullName,
+    subject: message.subject,
+    textContent: message.text,
+    htmlContent: message.html
+  });
+  return { enabled: true };
+}
+
+async function sendSayonaraGuestPaymentConfirmationEmail(registration, sayonaraGuestOrder) {
+  if (!isSmtpEnabled()) {
+    return { enabled: false };
+  }
+  const message = buildSayonaraGuestPaymentConfirmationEmailMessage(registration, sayonaraGuestOrder);
   await sendSmtpEmail({
     toEmail: registration.email,
     toName: registration.fullName,
@@ -7078,6 +8191,7 @@ function getStaticFilePath(urlPath) {
     '/payment-cancel': 'payment-cancel.html',
     '/catering-registration': 'catering-registration.html',
     '/sayonara-registration': 'sayonara-registration.html',
+    '/sayonara-plus-one-registration': 'sayonara-plus-one-registration.html',
     '/privacy': 'privacy.html',
     '/terms': 'terms.html',
     '/registration': 'registration.html',
@@ -7273,6 +8387,46 @@ function createServer(options = {}) {
       return;
     }
 
+    if (req.method === 'GET' && pathname === '/api/sayonara-guest-access') {
+      const token = String(reqUrl.searchParams.get('token') || '').trim();
+      if (!token) {
+        sendJson(res, 400, { error: 'token is required.' });
+        return;
+      }
+
+      const access = getSayonaraGuestAccessState(db, token);
+      if (access.state === 'invalid') {
+        sendJson(res, 404, { state: 'invalid', error: 'This Sayonara +1 registration link is invalid or already used.' });
+        return;
+      }
+
+      const standardSayonaraOrder = access.registration ? getSayonaraOrderByRegistrationId(db, access.registration.id) : null;
+      sendJson(res, 200, {
+        state: access.state,
+        registration: access.registration ? {
+          id: access.registration.id,
+          fullName: access.registration.fullName,
+          email: access.registration.email,
+          campType: access.registration.campType,
+          sayonaraAttending: Boolean(access.registration.sayonaraAttending),
+          hasPaidSayonaraOrder: Boolean(standardSayonaraOrder && String(standardSayonaraOrder.status || '').trim() === 'PAID')
+        } : null,
+        sayonaraGuestOrder: access.sayonaraGuestOrder ? {
+          id: access.sayonaraGuestOrder.id,
+          status: access.sayonaraGuestOrder.status,
+          amount: access.sayonaraGuestOrder.amount,
+          currency: access.sayonaraGuestOrder.currency,
+          guestFullName: access.sayonaraGuestOrder.guestFullName,
+          spiritsPackageCount: access.sayonaraGuestOrder.spiritsPackageCount
+        } : null,
+        sayonara: {
+          basePrice: SAYONARA_BASE_PRICE,
+          spiritsPackagePrice: SAYONARA_SPIRITS_PACKAGE_PRICE
+        }
+      });
+      return;
+    }
+
     if (req.method === 'GET' && pathname === '/retry-payment') {
       const token = String(reqUrl.searchParams.get('token') || '').trim();
       const payload = verifyRetryPaymentToken(token);
@@ -7353,6 +8507,35 @@ function createServer(options = {}) {
         sendHtml(res, status, buildRetryPaymentPage({
           title: 'Sayonara Payment Unavailable',
           message: error.message || 'Could not restart Sayonara payment. Please request a new payment link from the organizer.',
+          registration
+        }));
+        return;
+      }
+    }
+
+    if (req.method === 'GET' && pathname === '/retry-sayonara-guest-payment') {
+      const token = String(reqUrl.searchParams.get('token') || '').trim();
+      const payload = verifySayonaraGuestRetryPaymentToken(token);
+      if (!payload) {
+        sendHtml(res, 400, buildRetryPaymentPage({
+          title: 'Invalid Sayonara +1 Payment Link',
+          message: 'This Sayonara +1 payment link is invalid or expired. Please request a new link from the organizer.'
+        }));
+        return;
+      }
+
+      try {
+        const result = await createCheckoutSessionForSayonaraGuestOrder(db, payload.sayonaraGuestOrderId, { source: 'sayonara_guest_retry_link' });
+        res.writeHead(302, { Location: result.session.url });
+        res.end();
+        return;
+      } catch (error) {
+        const sayonaraGuestOrder = getSayonaraGuestOrderById(db, payload.sayonaraGuestOrderId);
+        const registration = sayonaraGuestOrder ? getRegistrationById(db, sayonaraGuestOrder.registrationId) : null;
+        const status = Number(error.statusCode) || 400;
+        sendHtml(res, status, buildRetryPaymentPage({
+          title: 'Sayonara +1 Payment Unavailable',
+          message: error.message || 'Could not restart Sayonara +1 payment. Please request a new link from the organizer.',
           registration
         }));
         return;
@@ -7811,13 +8994,22 @@ function createServer(options = {}) {
       const registrations = readRegistrations(db);
       const cateringOrders = readCateringOrders(db);
       const sayonaraOrders = readSayonaraOrders(db);
+      const sayonaraGuestOrders = readSayonaraGuestOrders(db);
       const cateringRegistrationIds = new Set(cateringOrders.map((item) => item.registrationId));
       const sayonaraRegistrationIds = new Set(sayonaraOrders.map((item) => item.registrationId));
+      const sayonaraPaidRegistrationIds = new Set(
+        sayonaraOrders
+          .filter((item) => String(item.status || '').trim() === 'PAID')
+          .map((item) => item.registrationId)
+      );
+      const sayonaraGuestRegistrationIds = new Set(sayonaraGuestOrders.map((item) => item.registrationId));
       sendJson(res, 200, {
         registrations: registrations.map((item) => ({
           ...item,
           hasCateringOrder: cateringRegistrationIds.has(item.id),
-          hasSayonaraOrder: sayonaraRegistrationIds.has(item.id)
+          hasSayonaraOrder: sayonaraRegistrationIds.has(item.id),
+          hasPaidSayonaraOrder: sayonaraPaidRegistrationIds.has(item.id),
+          hasSayonaraGuestOrder: sayonaraGuestRegistrationIds.has(item.id)
         }))
       });
       return;
@@ -7905,7 +9097,8 @@ function createServer(options = {}) {
 
       const registrations = readRegistrations(db);
       const orders = readSayonaraOrders(db);
-      const csv = buildCombinedSayonaraCsvExport(registrations, orders);
+      const guestOrders = readSayonaraGuestOrders(db);
+      const csv = buildCombinedSayonaraCsvExport(registrations, orders, guestOrders);
       const exportDate = new Date().toISOString().slice(0, 10);
 
       res.writeHead(200, {
@@ -8028,6 +9221,50 @@ function createServer(options = {}) {
       } catch (error) {
         const statusCode = Number(error.statusCode) || 400;
         sendJson(res, statusCode, { error: error.message || 'Could not send Sayonara invitation email.' });
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/admin/registrations/send-sayonara-guest-invite-email') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      try {
+        const body = await parseJsonBody(req);
+        const registrationId = String(body?.registrationId || '').trim();
+        if (!registrationId) {
+          sendJson(res, 400, { error: 'registrationId is required.' });
+          return;
+        }
+
+        const registration = getRegistrationById(db, registrationId);
+        if (!registration) {
+          sendJson(res, 404, { error: 'Registration not found.' });
+          return;
+        }
+
+        const standardOrder = getSayonaraOrderByRegistrationId(db, registrationId);
+        const guestOrder = getSayonaraGuestOrderByRegistrationId(db, registrationId);
+        if (!isRegistrationEligibleForSayonaraGuestInvite(registration, {
+          standardSayonaraOrder: standardOrder,
+          guestSayonaraOrder: guestOrder
+        })) {
+          sendJson(res, 400, { error: 'Sayonara +1 invitation is not available for this registration.' });
+          return;
+        }
+
+        const tokenPayload = await runWithSqliteRetry(() => createSayonaraGuestAccessToken(db, registrationId, 'admin'));
+        await sendSayonaraGuestInvitationEmail(registration, tokenPayload.url);
+        sendJson(res, 200, {
+          message: 'Sayonara +1 invitation email sent.',
+          email: registration.email,
+          url: tokenPayload.url
+        });
+      } catch (error) {
+        const statusCode = Number(error.statusCode) || 400;
+        sendJson(res, statusCode, { error: error.message || 'Could not send Sayonara +1 invitation email.' });
       }
       return;
     }
@@ -8497,12 +9734,37 @@ function createServer(options = {}) {
 
       try {
         const body = await parseJsonBody(req);
-        const sayonaraOrderId = String(body?.sayonaraOrderId || '').trim();
-        if (!sayonaraOrderId) {
-          sendJson(res, 400, { error: 'sayonaraOrderId is required.' });
+        const entityType = String(body?.entityType || (body?.sayonaraGuestOrderId ? 'sayonara_guest_order' : 'sayonara_order')).trim();
+        const entityId = String(body?.entityId || body?.sayonaraOrderId || body?.sayonaraGuestOrderId || '').trim();
+        if (!entityId) {
+          sendJson(res, 400, { error: 'entityId is required.' });
           return;
         }
-        const order = getSayonaraOrderById(db, sayonaraOrderId);
+        if (entityType === 'sayonara_guest_order') {
+          const order = getSayonaraGuestOrderById(db, entityId);
+          if (!order) {
+            sendJson(res, 404, { error: 'Sayonara +1 order not found.' });
+            return;
+          }
+          if (order.status === 'PAID') {
+            sendJson(res, 400, { error: 'This Sayonara +1 order is already paid.' });
+            return;
+          }
+          const registration = getRegistrationById(db, order.registrationId);
+          if (!registration) {
+            sendJson(res, 404, { error: 'Registration not found for this Sayonara +1 order.' });
+            return;
+          }
+          const result = await sendSayonaraGuestRetryPaymentEmail(registration, order);
+          sendJson(res, 200, {
+            message: 'Sayonara +1 payment link email sent.',
+            email: registration.email,
+            expiresAt: result.expiresAt
+          });
+          return;
+        }
+
+        const order = getSayonaraOrderById(db, entityId);
         if (!order) {
           sendJson(res, 404, { error: 'Sayonara order not found.' });
           return;
@@ -8537,12 +9799,84 @@ function createServer(options = {}) {
 
       try {
         const body = await parseJsonBody(req);
-        const sayonaraOrderId = String(body?.sayonaraOrderId || '').trim();
-        if (!sayonaraOrderId) {
-          sendJson(res, 400, { error: 'sayonaraOrderId is required.' });
+        const entityType = String(body?.entityType || (body?.sayonaraGuestOrderId ? 'sayonara_guest_order' : 'sayonara_order')).trim();
+        const entityId = String(body?.entityId || body?.sayonaraOrderId || body?.sayonaraGuestOrderId || '').trim();
+        if (!entityId) {
+          sendJson(res, 400, { error: 'entityId is required.' });
           return;
         }
-        const order = getSayonaraOrderById(db, sayonaraOrderId);
+        if (entityType === 'sayonara_guest_order') {
+          const order = getSayonaraGuestOrderById(db, entityId);
+          if (!order) {
+            sendJson(res, 404, { error: 'Sayonara +1 order not found.' });
+            return;
+          }
+          const checkoutSessionId = String(order.stripeCheckoutSessionId || '').trim();
+          if (!checkoutSessionId) {
+            sendJson(res, 400, { error: 'No Stripe session is stored for this Sayonara +1 order.' });
+            return;
+          }
+
+          const session = await getStripeCheckoutSession(checkoutSessionId);
+          const stripeOrderId = extractSayonaraGuestOrderIdFromStripeSession(session);
+          if (stripeOrderId && stripeOrderId !== order.id) {
+            sendJson(res, 409, { error: `Stripe session Sayonara +1 order mismatch. Stripe points to ${stripeOrderId}, expected ${order.id}.` });
+            return;
+          }
+
+          const stripeCurrency = String(session?.currency || '').trim().toUpperCase();
+          const stripeAmountMinor = Number(session?.amount_total ?? NaN);
+          const expectedMinor = toStripeMinorUnits(order.amount, order.currency || 'EUR');
+          if (stripeCurrency && stripeCurrency !== String(order.currency || 'EUR').toUpperCase()) {
+            sendJson(res, 409, { error: `Stripe currency mismatch. Stripe: ${stripeCurrency}, order: ${order.currency}.` });
+            return;
+          }
+          if (Number.isFinite(stripeAmountMinor) && stripeAmountMinor !== expectedMinor) {
+            sendJson(res, 409, { error: `Stripe amount mismatch. Stripe: ${stripeAmountMinor}, order: ${expectedMinor} (minor units).` });
+            return;
+          }
+
+          const eventCreatedAt = stripeUnixToIso(session?.created) || new Date().toISOString();
+          const syncResult = await runWithSqliteRetry(() => syncSayonaraGuestOrderFromStripeSession(db, session, {
+            eventType: 'checkout.session.admin_lookup',
+            eventCreatedAt
+          }));
+
+          let invoice = null;
+          let invoiceWarning = '';
+          if (syncResult.paid && isSzamlazzEnabled()) {
+            try {
+              const invoiceResult = await createInvoiceForSayonaraGuestOrder(db, syncResult.sayonaraGuestOrderId, {
+                triggerSource: 'stripe_admin_check'
+              });
+              invoice = invoiceResult.invoice;
+            } catch (invoiceError) {
+              invoiceWarning = invoiceError.message || 'Invoice creation failed.';
+              console.error(`Sayonara +1 invoice creation failed for ${syncResult.sayonaraGuestOrderId}: ${invoiceWarning}`);
+            }
+          }
+
+          const updatedOrder = getSayonaraGuestOrderById(db, syncResult.sayonaraGuestOrderId);
+          sendJson(res, 200, {
+            message: syncResult.paid ? 'Stripe payment matched and Sayonara +1 order was updated.' : 'Stripe session found, but payment is not completed yet.',
+            entityType: 'sayonara_guest_order',
+            sayonaraGuestOrderId: syncResult.sayonaraGuestOrderId,
+            sayonaraOrderStatus: updatedOrder?.status || 'UNKNOWN',
+            paid: Boolean(syncResult.paid),
+            stripe: {
+              sessionId: getStripeStringId(session?.id),
+              paymentStatus: String(session?.payment_status || '').trim().toLowerCase(),
+              checkoutStatus: String(session?.status || '').trim().toLowerCase(),
+              paymentIntentId: getStripeStringId(session?.payment_intent),
+              customerId: getStripeStringId(session?.customer)
+            },
+            invoice,
+            invoiceWarning
+          });
+          return;
+        }
+
+        const order = getSayonaraOrderById(db, entityId);
         if (!order) {
           sendJson(res, 404, { error: 'Sayonara order not found.' });
           return;
@@ -8595,6 +9929,7 @@ function createServer(options = {}) {
         const updatedOrder = getSayonaraOrderById(db, syncResult.sayonaraOrderId);
         sendJson(res, 200, {
           message: syncResult.paid ? 'Stripe payment matched and Sayonara order was updated.' : 'Stripe session found, but payment is not completed yet.',
+          entityType: 'sayonara_order',
           sayonaraOrderId: syncResult.sayonaraOrderId,
           sayonaraOrderStatus: updatedOrder?.status || 'UNKNOWN',
           paid: Boolean(syncResult.paid),
@@ -8623,13 +9958,69 @@ function createServer(options = {}) {
 
       try {
         const body = await parseJsonBody(req);
-        const sayonaraOrderId = String(body?.sayonaraOrderId || '').trim();
-        if (!sayonaraOrderId) {
-          sendJson(res, 400, { error: 'sayonaraOrderId is required.' });
+        const entityType = String(body?.entityType || (body?.sayonaraGuestOrderId ? 'sayonara_guest_order' : 'sayonara_order')).trim();
+        const entityId = String(body?.entityId || body?.sayonaraOrderId || body?.sayonaraGuestOrderId || '').trim();
+        if (!entityId) {
+          sendJson(res, 400, { error: 'entityId is required.' });
+          return;
+        }
+        if (entityType === 'sayonara_guest_order') {
+          const order = getSayonaraGuestOrderById(db, entityId);
+          if (!order) {
+            sendJson(res, 404, { error: 'Sayonara +1 order not found.' });
+            return;
+          }
+          if (order.status === 'PAID') {
+            sendJson(res, 400, { error: 'Paid Sayonara +1 orders cannot be deleted.' });
+            return;
+          }
+
+          const invoice = getSayonaraGuestInvoiceRecordByOrderId(db, entityId);
+          if (invoice) {
+            sendJson(res, 400, { error: 'Sayonara +1 order cannot be deleted because an invoice record already exists.' });
+            return;
+          }
+
+          const checkoutSessionId = String(order.stripeCheckoutSessionId || '').trim();
+          if (checkoutSessionId) {
+            if (!isStripeEnabled()) {
+              sendJson(res, 503, { error: 'Stripe is not configured, so the existing Sayonara +1 payment link cannot be safely expired.' });
+              return;
+            }
+
+            const session = await getStripeCheckoutSession(checkoutSessionId);
+            const stripePaymentStatus = String(session?.payment_status || '').trim().toLowerCase();
+            const stripeCheckoutStatus = String(session?.status || '').trim().toLowerCase();
+
+            if (stripePaymentStatus === 'paid') {
+              const eventCreatedAt = stripeUnixToIso(session?.created) || new Date().toISOString();
+              await runWithSqliteRetry(() => syncSayonaraGuestOrderFromStripeSession(db, session, {
+                eventType: 'checkout.session.admin_delete_guard',
+                eventCreatedAt
+              }));
+              sendJson(res, 409, { error: 'Stripe already shows this Sayonara +1 order as paid, so it cannot be deleted.' });
+              return;
+            }
+
+            if (stripeCheckoutStatus === 'open') {
+              await expireStripeCheckoutSession(checkoutSessionId);
+            } else if (stripeCheckoutStatus && stripeCheckoutStatus !== 'expired') {
+              sendJson(res, 409, { error: `Sayonara +1 order cannot be deleted because the Stripe session status is ${stripeCheckoutStatus}.` });
+              return;
+            }
+          }
+
+          const changedRows = await runWithSqliteRetry(() => deleteSayonaraGuestOrder(db, entityId));
+          if (changedRows === 0) {
+            sendJson(res, 404, { error: 'Sayonara +1 order not found.' });
+            return;
+          }
+
+          sendJson(res, 200, { message: 'Sayonara +1 order deleted.' });
           return;
         }
 
-        const order = getSayonaraOrderById(db, sayonaraOrderId);
+        const order = getSayonaraOrderById(db, entityId);
         if (!order) {
           sendJson(res, 404, { error: 'Sayonara order not found.' });
           return;
@@ -8639,7 +10030,7 @@ function createServer(options = {}) {
           return;
         }
 
-        const invoice = getSayonaraInvoiceRecordByOrderId(db, sayonaraOrderId);
+        const invoice = getSayonaraInvoiceRecordByOrderId(db, entityId);
         if (invoice) {
           sendJson(res, 400, { error: 'Sayonara order cannot be deleted because an invoice record already exists.' });
           return;
@@ -8674,7 +10065,7 @@ function createServer(options = {}) {
           }
         }
 
-        const changedRows = await runWithSqliteRetry(() => deleteSayonaraOrder(db, sayonaraOrderId));
+        const changedRows = await runWithSqliteRetry(() => deleteSayonaraOrder(db, entityId));
         if (changedRows === 0) {
           sendJson(res, 404, { error: 'Sayonara order not found.' });
           return;
@@ -9122,6 +10513,60 @@ function createServer(options = {}) {
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/api/sayonara-guest/register') {
+      try {
+        const body = await parseJsonBody(req);
+        const token = String(body?.token || '').trim();
+        if (!token) {
+          sendJson(res, 400, { error: 'token is required.' });
+          return;
+        }
+
+        const guestFullName = String(body?.guestFullName || '').trim();
+        const spiritsPackageCount = normalizeSayonaraSpiritsPackageCount(body?.spiritsPackageCount);
+
+        const created = await runWithSqliteRetry(() => createSayonaraGuestOrderFromToken(db, token, {
+          guestFullName,
+          spiritsPackageCount
+        }));
+
+        let checkoutSession = null;
+        let paymentError = null;
+        try {
+          const checkoutResult = await createCheckoutSessionForSayonaraGuestOrder(db, created.order.id, { source: 'sayonara_guest_registration' });
+          checkoutSession = checkoutResult.session;
+        } catch (error) {
+          paymentError = error;
+          console.error(`Stripe session creation failed for ${created.order.id}: ${error.message}`);
+        }
+
+        sendJson(res, 201, {
+          message: checkoutSession
+            ? 'Sayonara +1 registration saved. Redirect to Stripe Checkout.'
+            : 'Sayonara +1 registration saved, but payment session could not be created. Please contact the organizer.',
+          sayonaraGuestOrderId: created.order.id,
+          registrationId: created.registration.id,
+          amount: created.order.amount,
+          currency: created.order.currency,
+          payment: {
+            provider: 'stripe',
+            status: checkoutSession ? 'CHECKOUT_READY' : 'CHECKOUT_FAILED',
+            checkoutSessionId: checkoutSession?.id || null,
+            checkoutUrl: checkoutSession?.url || null,
+            error: paymentError ? 'Checkout session creation failed.' : null
+          }
+        });
+      } catch (error) {
+        if (isSqliteBusyError(error)) {
+          sendJson(res, 503, { error: 'Saving failed due to high load. Please try again.' });
+          return;
+        }
+        const statusCode = Number(error.statusCode) || 400;
+        sendJson(res, statusCode, { error: error.message || 'Invalid request' });
+      }
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/payments/create-checkout-session') {
       try {
         const body = await parseJsonBody(req);
@@ -9309,6 +10754,53 @@ function createServer(options = {}) {
           return;
         }
 
+        if (entityType === 'sayonara_guest_order') {
+          const syncResult = await runWithSqliteRetry(() => syncSayonaraGuestOrderFromStripeSession(db, session, {
+            eventType: 'checkout.session.confirm_lookup',
+            eventCreatedAt
+          }));
+
+          if (!syncResult.sayonaraGuestOrderId) {
+            sendJson(res, 404, { error: 'Could not match this Stripe session to any Sayonara +1 order.' });
+            return;
+          }
+
+          if (syncResult.paid && isSzamlazzEnabled()) {
+            try {
+              await createInvoiceForSayonaraGuestOrder(db, syncResult.sayonaraGuestOrderId, {
+                triggerSource: 'stripe_confirm'
+              });
+            } catch (invoiceError) {
+              console.error(`Sayonara +1 invoice creation failed for ${syncResult.sayonaraGuestOrderId}: ${invoiceError.message}`);
+            }
+          }
+
+          const sayonaraGuestOrder = getSayonaraGuestOrderById(db, syncResult.sayonaraGuestOrderId);
+          if (syncResult.paid && syncResult.statusChanged && sayonaraGuestOrder) {
+            const registration = getRegistrationById(db, sayonaraGuestOrder.registrationId);
+            if (registration) {
+              sendSayonaraGuestPaymentConfirmationEmail(registration, sayonaraGuestOrder).catch((error) => {
+                console.error(`Sayonara +1 confirmation email failed for ${sayonaraGuestOrder.id}: ${error.message}`);
+              });
+            }
+          }
+          sendJson(res, 200, {
+            entityType: 'sayonara_guest_order',
+            sayonaraGuestOrderId: syncResult.sayonaraGuestOrderId,
+            registrationId: sayonaraGuestOrder?.registrationId || '',
+            registrationStatus: sayonaraGuestOrder?.status || 'UNKNOWN',
+            paid: Boolean(syncResult.paid),
+            stripe: {
+              sessionId: getStripeStringId(session?.id),
+              paymentStatus: String(session?.payment_status || '').trim().toLowerCase(),
+              checkoutStatus: String(session?.status || '').trim().toLowerCase(),
+              paymentIntentId: getStripeStringId(session?.payment_intent),
+              customerId: getStripeStringId(session?.customer)
+            }
+          });
+          return;
+        }
+
         const syncResult = await runWithSqliteRetry(() => syncRegistrationFromStripeSession(db, session, {
           eventType: 'checkout.session.confirm_lookup',
           eventCreatedAt
@@ -9448,6 +10940,32 @@ function createServer(options = {}) {
               if (updatedOrder && registration) {
                 sendSayonaraPaymentConfirmationEmail(registration, updatedOrder).catch((error) => {
                   console.error(`Sayonara confirmation email failed for ${updatedOrder.id}: ${error.message}`);
+                });
+              }
+            }
+          } else if (entityType === 'sayonara_guest_order') {
+            const syncResult = await runWithSqliteRetry(() => syncSayonaraGuestOrderFromStripeSession(db, session, {
+              eventType,
+              eventCreatedAt
+            }));
+
+            if (!syncResult.sayonaraGuestOrderId) {
+              console.warn(`Stripe webhook ${eventType}: Sayonara +1 order could not be resolved.`);
+            } else if (syncResult.paid && isSzamlazzEnabled()) {
+              try {
+                await createInvoiceForSayonaraGuestOrder(db, syncResult.sayonaraGuestOrderId, {
+                  triggerSource: 'stripe_webhook'
+                });
+              } catch (invoiceError) {
+                console.error(`Sayonara +1 invoice creation failed for ${syncResult.sayonaraGuestOrderId}: ${invoiceError.message}`);
+              }
+            }
+            if (syncResult.paid && syncResult.statusChanged) {
+              const updatedOrder = getSayonaraGuestOrderById(db, syncResult.sayonaraGuestOrderId);
+              const registration = updatedOrder ? getRegistrationById(db, updatedOrder.registrationId) : null;
+              if (updatedOrder && registration) {
+                sendSayonaraGuestPaymentConfirmationEmail(registration, updatedOrder).catch((error) => {
+                  console.error(`Sayonara +1 confirmation email failed for ${updatedOrder.id}: ${error.message}`);
                 });
               }
             }
