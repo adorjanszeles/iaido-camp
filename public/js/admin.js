@@ -65,6 +65,15 @@
   const emailModalCloseBtn = document.getElementById('email-modal-close-btn');
   const emailModalCancelBtn = document.getElementById('email-modal-cancel-btn');
   const emailModalSaveBtn = document.getElementById('email-modal-save-btn');
+  const sayonaraPackagesModalEl = document.getElementById('sayonara-packages-modal');
+  const sayonaraPackagesModalFormEl = document.getElementById('sayonara-packages-modal-form');
+  const sayonaraPackagesModalRegistrationMetaEl = document.getElementById('sayonara-packages-modal-registration-meta');
+  const sayonaraPackagesModalCountEl = document.getElementById('sayonara-packages-modal-count');
+  const sayonaraPackagesModalTotalEl = document.getElementById('sayonara-packages-modal-total');
+  const sayonaraPackagesModalMessageEl = document.getElementById('sayonara-packages-modal-message');
+  const sayonaraPackagesModalCloseBtn = document.getElementById('sayonara-packages-modal-close-btn');
+  const sayonaraPackagesModalCancelBtn = document.getElementById('sayonara-packages-modal-cancel-btn');
+  const sayonaraPackagesModalSaveBtn = document.getElementById('sayonara-packages-modal-save-btn');
   let allRegistrations = [];
   let allInvoices = [];
   let allCateringOrders = [];
@@ -79,6 +88,8 @@
   let emailJobPollTimer = null;
   let examModalRegistrationId = '';
   let emailModalRegistrationId = '';
+  let sayonaraPackagesModalEntityType = '';
+  let sayonaraPackagesModalEntityId = '';
 
   const examGradeOptions = ['', '6. kyu', '5. kyu', '4. kyu', '3. kyu', '2. kyu', '1. kyu', '1. dan', '2. dan', '3. dan', '4. dan', '5. dan', '6. dan', '7. dan', '8. dan'];
 
@@ -220,6 +231,22 @@
     emailModalMessageEl.textContent = text;
   }
 
+  function setSayonaraPackagesModalMessage(type, text) {
+    if (!sayonaraPackagesModalMessageEl) return;
+    if (!text) {
+      sayonaraPackagesModalMessageEl.className = '';
+      sayonaraPackagesModalMessageEl.textContent = '';
+      return;
+    }
+    sayonaraPackagesModalMessageEl.className = `notice ${type}`;
+    sayonaraPackagesModalMessageEl.textContent = text;
+  }
+
+  function findSayonaraOrder(entityType, entityId) {
+    return allSayonaraOrders.find((item) => String(item.entityType || 'sayonara_order') === String(entityType || 'sayonara_order')
+      && String(item.id || '') === String(entityId || '')) || null;
+  }
+
   function syncExamModalGradeState() {
     if (examModalIaidoGradeEl) {
       examModalIaidoGradeEl.disabled = !examModalIaidoEnabledEl?.checked;
@@ -304,6 +331,52 @@
     if (emailModalValueEl) {
       emailModalValueEl.focus();
       emailModalValueEl.select();
+    }
+  }
+
+  function updateSayonaraPackagesModalTotal() {
+    const order = findSayonaraOrder(sayonaraPackagesModalEntityType, sayonaraPackagesModalEntityId);
+    if (!sayonaraPackagesModalTotalEl || !order) return;
+    const packageCount = Math.max(0, Math.floor(Number(sayonaraPackagesModalCountEl?.value || 0) || 0));
+    const basePrice = Number(order.basePrice || 69);
+    const packagePrice = Number(order.spiritsPackagePrice || 30);
+    const nextAmount = Math.round((basePrice + (packageCount * packagePrice)) * 100) / 100;
+    sayonaraPackagesModalTotalEl.textContent = `Updated total: ${formatCurrency(nextAmount, order.currency || 'EUR')}`;
+  }
+
+  function closeSayonaraPackagesModal() {
+    sayonaraPackagesModalEntityType = '';
+    sayonaraPackagesModalEntityId = '';
+    setSayonaraPackagesModalMessage('', '');
+    if (sayonaraPackagesModalFormEl) {
+      sayonaraPackagesModalFormEl.reset();
+    }
+    if (sayonaraPackagesModalEl) {
+      sayonaraPackagesModalEl.hidden = true;
+    }
+  }
+
+  function openSayonaraPackagesModal(order) {
+    sayonaraPackagesModalEntityType = String(order.entityType || 'sayonara_order');
+    sayonaraPackagesModalEntityId = String(order.id || '');
+    const orderLabel = sayonaraPackagesModalEntityType === 'sayonara_guest_order' ? 'Sayonara +1 guest order' : 'Sayonara order';
+    const guestText = sayonaraPackagesModalEntityType === 'sayonara_guest_order' && order.guestFullName
+      ? ` | Guest: ${order.guestFullName}`
+      : '';
+    if (sayonaraPackagesModalRegistrationMetaEl) {
+      sayonaraPackagesModalRegistrationMetaEl.textContent = `${orderLabel} ${order.id} | ${order.registrationFullName} (${order.registrationEmail})${guestText}`;
+    }
+    if (sayonaraPackagesModalCountEl) {
+      sayonaraPackagesModalCountEl.value = String(Math.max(0, Math.floor(Number(order.spiritsPackageCount || 0) || 0)));
+    }
+    setSayonaraPackagesModalMessage('', '');
+    updateSayonaraPackagesModalTotal();
+    if (sayonaraPackagesModalEl) {
+      sayonaraPackagesModalEl.hidden = false;
+    }
+    if (sayonaraPackagesModalCountEl) {
+      sayonaraPackagesModalCountEl.focus();
+      sayonaraPackagesModalCountEl.select();
     }
   }
 
@@ -791,6 +864,9 @@
         const entityId = String(item.id || '').trim();
         const isPendingPayment = String(item.status || '').trim().toUpperCase() === 'PENDING_PAYMENT';
         const canSendGuestInvite = Boolean(item.canSendGuestInvite);
+        const editPackagesAction = isPendingPayment
+          ? `<button class="btn secondary btn-small js-edit-sayonara-packages" data-sayonara-entity-type="${escapeHtml(entityType)}" data-sayonara-entity-id="${escapeHtml(entityId)}" type="button">Edit packages</button>`
+          : '<span class="helper">-</span>';
         const stripeCheckAction = isPendingPayment
           ? `<button class="btn secondary btn-small js-check-sayonara-stripe-payment" data-sayonara-entity-type="${escapeHtml(entityType)}" data-sayonara-entity-id="${escapeHtml(entityId)}" type="button">Check Stripe payment</button>`
           : '<span class="helper">-</span>';
@@ -819,7 +895,7 @@
             <td>${escapeHtml(item.status || '-')}<br /><span class="helper">${escapeHtml(item.invoiceStatus || '-')}</span></td>
             <td>${detailsMarkup}</td>
             <td>${formatCurrency(Number(item.amount || 0), item.currency || 'EUR')}</td>
-            <td>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${guestInviteAction}<div style="height:0.35rem"></div>${deleteAction}</td>
+            <td>${editPackagesAction}<div style="height:0.35rem"></div>${stripeCheckAction}<div style="height:0.35rem"></div>${retryEmailAction}<div style="height:0.35rem"></div>${guestInviteAction}<div style="height:0.35rem"></div>${deleteAction}</td>
           </tr>
         `;
       })
@@ -1877,6 +1953,25 @@
     window.alert(result.message || 'Sayonara payment link email sent.');
   }
 
+  async function updateSayonaraPackages(entityType, entityId, spiritsPackageCount) {
+    const response = await fetch('/api/admin/sayonara-orders/update-packages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ entityType, entityId, spiritsPackageCount })
+    });
+    const result = await readJsonResponseOrThrow(response);
+    if (response.status === 401) {
+      window.location.href = '/admin';
+      return null;
+    }
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to update Sayonara packages.');
+    }
+    return result;
+  }
+
   async function checkSayonaraStripePayment(entityType, entityId) {
     const response = await fetch('/api/admin/sayonara-orders/check-stripe-payment', {
       method: 'POST',
@@ -2350,6 +2445,60 @@
     });
   }
 
+  if (sayonaraPackagesModalCloseBtn) {
+    sayonaraPackagesModalCloseBtn.addEventListener('click', closeSayonaraPackagesModal);
+  }
+
+  if (sayonaraPackagesModalCancelBtn) {
+    sayonaraPackagesModalCancelBtn.addEventListener('click', closeSayonaraPackagesModal);
+  }
+
+  if (sayonaraPackagesModalEl) {
+    sayonaraPackagesModalEl.addEventListener('click', (event) => {
+      if (event.target === sayonaraPackagesModalEl) {
+        closeSayonaraPackagesModal();
+      }
+    });
+  }
+
+  if (sayonaraPackagesModalCountEl) {
+    sayonaraPackagesModalCountEl.addEventListener('input', updateSayonaraPackagesModalTotal);
+  }
+
+  if (sayonaraPackagesModalFormEl) {
+    sayonaraPackagesModalFormEl.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!sayonaraPackagesModalEntityId) return;
+
+      const spiritsPackageCount = Math.max(0, Math.floor(Number(sayonaraPackagesModalCountEl?.value || 0) || 0));
+      if (sayonaraPackagesModalSaveBtn) {
+        sayonaraPackagesModalSaveBtn.disabled = true;
+        sayonaraPackagesModalSaveBtn.textContent = 'Saving...';
+      }
+      setSayonaraPackagesModalMessage('', '');
+
+      try {
+        const result = await updateSayonaraPackages(
+          sayonaraPackagesModalEntityType || 'sayonara_order',
+          sayonaraPackagesModalEntityId,
+          spiritsPackageCount
+        );
+        if (!result) return;
+
+        closeSayonaraPackagesModal();
+        await loadData();
+        window.alert(result.message || 'Sayonara order updated.');
+      } catch (error) {
+        setSayonaraPackagesModalMessage('error', error.message);
+      } finally {
+        if (sayonaraPackagesModalSaveBtn) {
+          sayonaraPackagesModalSaveBtn.disabled = false;
+          sayonaraPackagesModalSaveBtn.textContent = 'Save packages';
+        }
+      }
+    });
+  }
+
   if (emailRecipientModeEl) {
     emailRecipientModeEl.addEventListener('change', () => {
       setEmailSelectionControlsState();
@@ -2569,6 +2718,20 @@
 
   if (sayonaraOrderRowsEl) {
     sayonaraOrderRowsEl.addEventListener('click', (event) => {
+      const editPackagesButton = event.target.closest('.js-edit-sayonara-packages');
+      if (editPackagesButton) {
+        const entityType = editPackagesButton.getAttribute('data-sayonara-entity-type') || 'sayonara_order';
+        const entityId = editPackagesButton.getAttribute('data-sayonara-entity-id');
+        if (!entityId) return;
+        const order = findSayonaraOrder(entityType, entityId);
+        if (!order) {
+          window.alert('Sayonara order not found in the current admin view. Please refresh the list.');
+          return;
+        }
+        openSayonaraPackagesModal(order);
+        return;
+      }
+
       const retryButton = event.target.closest('.js-send-sayonara-retry-email');
       if (retryButton) {
         const entityType = retryButton.getAttribute('data-sayonara-entity-type') || 'sayonara_order';

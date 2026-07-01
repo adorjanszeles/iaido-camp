@@ -4882,6 +4882,42 @@ function updateSayonaraOrderStatus(db, sayonaraOrderId, status, options = {}) {
   return Number(result.changes || 0);
 }
 
+function updateSayonaraOrderSpiritsPackageCount(db, sayonaraOrderId, spiritsPackageCount, options = {}) {
+  const safeId = String(sayonaraOrderId || '').trim();
+  if (!safeId) return 0;
+
+  const current = getSayonaraOrderById(db, safeId);
+  if (!current) return 0;
+  if (String(current.status || '').trim() !== 'PENDING_PAYMENT') {
+    throw createError(400, `Only PENDING_PAYMENT Sayonara orders can be updated. Current status: ${current.status}.`);
+  }
+
+  const normalizedCount = normalizeSayonaraSpiritsPackageCount(spiritsPackageCount);
+  const updatedAt = new Date().toISOString();
+  const result = db.prepare(`
+    UPDATE sayonara_orders
+    SET
+      spirits_package_count = ?,
+      amount = ?,
+      updated_at = ?,
+      stripe_checkout_session_id = '',
+      stripe_payment_intent_id = '',
+      stripe_customer_id = '',
+      stripe_last_event_type = ?,
+      stripe_last_event_at = ?
+    WHERE id = ?
+  `).run(
+    normalizedCount,
+    getSayonaraAmount(current.attending, normalizedCount),
+    updatedAt,
+    String(options.lastEventType || 'admin_package_update').trim(),
+    updatedAt,
+    safeId
+  );
+
+  return Number(result.changes || 0);
+}
+
 function readSayonaraOrders(db) {
   const rows = db.prepare('SELECT * FROM sayonara_orders ORDER BY datetime(created_at) ASC, rowid ASC').all();
   return rows.map(mapSayonaraOrderRow);
@@ -5196,6 +5232,42 @@ function updateSayonaraGuestOrderStatus(db, sayonaraGuestOrderId, status, option
   `);
   const paidAt = String(options.paidAt || new Date().toISOString()).trim();
   const result = update.run(normalizedStatus, new Date().toISOString(), normalizedStatus, paidAt, safeId);
+  return Number(result.changes || 0);
+}
+
+function updateSayonaraGuestOrderSpiritsPackageCount(db, sayonaraGuestOrderId, spiritsPackageCount, options = {}) {
+  const safeId = String(sayonaraGuestOrderId || '').trim();
+  if (!safeId) return 0;
+
+  const current = getSayonaraGuestOrderById(db, safeId);
+  if (!current) return 0;
+  if (String(current.status || '').trim() !== 'PENDING_PAYMENT') {
+    throw createError(400, `Only PENDING_PAYMENT Sayonara +1 orders can be updated. Current status: ${current.status}.`);
+  }
+
+  const normalizedCount = normalizeSayonaraSpiritsPackageCount(spiritsPackageCount);
+  const updatedAt = new Date().toISOString();
+  const result = db.prepare(`
+    UPDATE sayonara_guest_orders
+    SET
+      spirits_package_count = ?,
+      amount = ?,
+      updated_at = ?,
+      stripe_checkout_session_id = '',
+      stripe_payment_intent_id = '',
+      stripe_customer_id = '',
+      stripe_last_event_type = ?,
+      stripe_last_event_at = ?
+    WHERE id = ?
+  `).run(
+    normalizedCount,
+    getSayonaraAmount(true, normalizedCount),
+    updatedAt,
+    String(options.lastEventType || 'admin_package_update').trim(),
+    updatedAt,
+    safeId
+  );
+
   return Number(result.changes || 0);
 }
 
@@ -9787,6 +9859,167 @@ function createServer(options = {}) {
       } catch (error) {
         const statusCode = Number(error.statusCode) || 400;
         sendJson(res, statusCode, { error: error.message || 'Could not send Sayonara payment link.' });
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/admin/sayonara-orders/update-packages') {
+      if (!isAdminAuthenticated(req, db)) {
+        sendJson(res, 401, { error: 'Admin login required.' });
+        return;
+      }
+
+      try {
+        const body = await parseJsonBody(req);
+        const entityType = String(body?.entityType || (body?.sayonaraGuestOrderId ? 'sayonara_guest_order' : 'sayonara_order')).trim();
+        const entityId = String(body?.entityId || body?.sayonaraOrderId || body?.sayonaraGuestOrderId || '').trim();
+        const spiritsPackageCount = normalizeSayonaraSpiritsPackageCount(body?.spiritsPackageCount);
+        if (!entityId) {
+          sendJson(res, 400, { error: 'entityId is required.' });
+          return;
+        }
+
+        if (entityType === 'sayonara_guest_order') {
+          const order = getSayonaraGuestOrderById(db, entityId);
+          if (!order) {
+            sendJson(res, 404, { error: 'Sayonara +1 order not found.' });
+            return;
+          }
+          if (order.status !== 'PENDING_PAYMENT') {
+            sendJson(res, 400, { error: `Only PENDING_PAYMENT Sayonara +1 orders can be updated. Current status: ${order.status}.` });
+            return;
+          }
+
+          const invoice = getSayonaraGuestInvoiceRecordByOrderId(db, entityId);
+          if (invoice) {
+            sendJson(res, 400, { error: 'Sayonara +1 order cannot be changed because an invoice record already exists.' });
+            return;
+          }
+
+          const checkoutSessionId = String(order.stripeCheckoutSessionId || '').trim();
+          if (checkoutSessionId) {
+            if (!isStripeEnabled()) {
+              sendJson(res, 503, { error: 'Stripe is not configured, so the existing Sayonara +1 payment link cannot be safely expired before changing the order.' });
+              return;
+            }
+
+            const session = await getStripeCheckoutSession(checkoutSessionId);
+            const stripeOrderId = extractSayonaraGuestOrderIdFromStripeSession(session);
+            if (stripeOrderId && stripeOrderId !== order.id) {
+              sendJson(res, 409, { error: `Stripe session Sayonara +1 order mismatch. Stripe points to ${stripeOrderId}, expected ${order.id}.` });
+              return;
+            }
+
+            const stripePaymentStatus = String(session?.payment_status || '').trim().toLowerCase();
+            const stripeCheckoutStatus = String(session?.status || '').trim().toLowerCase();
+            if (stripePaymentStatus === 'paid') {
+              const eventCreatedAt = stripeUnixToIso(session?.created) || new Date().toISOString();
+              await runWithSqliteRetry(() => syncSayonaraGuestOrderFromStripeSession(db, session, {
+                eventType: 'checkout.session.admin_package_update_guard',
+                eventCreatedAt
+              }));
+              sendJson(res, 409, { error: 'Stripe already shows this Sayonara +1 order as paid, so it cannot be changed.' });
+              return;
+            }
+
+            if (stripeCheckoutStatus === 'open') {
+              await expireStripeCheckoutSession(checkoutSessionId);
+            } else if (stripeCheckoutStatus && stripeCheckoutStatus !== 'expired') {
+              sendJson(res, 409, { error: `Sayonara +1 order cannot be changed because the Stripe session status is ${stripeCheckoutStatus}.` });
+              return;
+            }
+          }
+
+          const changedRows = await runWithSqliteRetry(() => updateSayonaraGuestOrderSpiritsPackageCount(db, entityId, spiritsPackageCount, {
+            lastEventType: checkoutSessionId ? 'checkout.session.expired.admin_package_update' : 'admin_package_update'
+          }));
+          if (changedRows === 0) {
+            sendJson(res, 404, { error: 'Sayonara +1 order not found.' });
+            return;
+          }
+
+          const updatedOrder = getSayonaraGuestOrderById(db, entityId);
+          sendJson(res, 200, {
+            message: checkoutSessionId
+              ? 'Sayonara +1 order updated and the previous Stripe payment link was expired.'
+              : 'Sayonara +1 order updated.',
+            order: updatedOrder
+          });
+          return;
+        }
+
+        const order = getSayonaraOrderById(db, entityId);
+        if (!order) {
+          sendJson(res, 404, { error: 'Sayonara order not found.' });
+          return;
+        }
+        if (order.status !== 'PENDING_PAYMENT') {
+          sendJson(res, 400, { error: `Only PENDING_PAYMENT Sayonara orders can be updated. Current status: ${order.status}.` });
+          return;
+        }
+
+        const invoice = getSayonaraInvoiceRecordByOrderId(db, entityId);
+        if (invoice) {
+          sendJson(res, 400, { error: 'Sayonara order cannot be changed because an invoice record already exists.' });
+          return;
+        }
+
+        const checkoutSessionId = String(order.stripeCheckoutSessionId || '').trim();
+        if (checkoutSessionId) {
+          if (!isStripeEnabled()) {
+            sendJson(res, 503, { error: 'Stripe is not configured, so the existing Sayonara payment link cannot be safely expired before changing the order.' });
+            return;
+          }
+
+          const session = await getStripeCheckoutSession(checkoutSessionId);
+          const stripeOrderId = extractSayonaraOrderIdFromStripeSession(session);
+          if (stripeOrderId && stripeOrderId !== order.id) {
+            sendJson(res, 409, { error: `Stripe session Sayonara order mismatch. Stripe points to ${stripeOrderId}, expected ${order.id}.` });
+            return;
+          }
+
+          const stripePaymentStatus = String(session?.payment_status || '').trim().toLowerCase();
+          const stripeCheckoutStatus = String(session?.status || '').trim().toLowerCase();
+          if (stripePaymentStatus === 'paid') {
+            const eventCreatedAt = stripeUnixToIso(session?.created) || new Date().toISOString();
+            await runWithSqliteRetry(() => syncSayonaraOrderFromStripeSession(db, session, {
+              eventType: 'checkout.session.admin_package_update_guard',
+              eventCreatedAt
+            }));
+            sendJson(res, 409, { error: 'Stripe already shows this Sayonara order as paid, so it cannot be changed.' });
+            return;
+          }
+
+          if (stripeCheckoutStatus === 'open') {
+            await expireStripeCheckoutSession(checkoutSessionId);
+          } else if (stripeCheckoutStatus && stripeCheckoutStatus !== 'expired') {
+            sendJson(res, 409, { error: `Sayonara order cannot be changed because the Stripe session status is ${stripeCheckoutStatus}.` });
+            return;
+          }
+        }
+
+        const changedRows = await runWithSqliteRetry(() => updateSayonaraOrderSpiritsPackageCount(db, entityId, spiritsPackageCount, {
+          lastEventType: checkoutSessionId ? 'checkout.session.expired.admin_package_update' : 'admin_package_update'
+        }));
+        if (changedRows === 0) {
+          sendJson(res, 404, { error: 'Sayonara order not found.' });
+          return;
+        }
+
+        const updatedOrder = getSayonaraOrderById(db, entityId);
+        sendJson(res, 200, {
+          message: checkoutSessionId
+            ? 'Sayonara order updated and the previous Stripe payment link was expired.'
+            : 'Sayonara order updated.',
+          order: updatedOrder
+        });
+      } catch (error) {
+        if (isSqliteBusyError(error)) {
+          sendJson(res, 503, { error: 'Database is currently busy. Please try again in a few seconds.' });
+          return;
+        }
+        const statusCode = Number(error.statusCode) || 400;
+        sendJson(res, statusCode, { error: error.message || 'Could not update Sayonara order.' });
       }
       return;
     }
